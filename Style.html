@@ -104,9 +104,6 @@ h1{ margin:0 0 8px; font-size:clamp(20px, 2.2vw, 32px); font-weight:800; }
   border-radius:16px;
   font-size:1rem;
 }
-.hero-field.hero-search .suggest-wrap{ width:100%; }
-.hero-field.hero-search input{ width:100%; }
-.helper-text{ font-size:.75rem; font-weight:500; color:var(--muted); margin-top:4px; }
 .hero-field.hero-stat{ min-width:160px; }
 .hero-number{ font-size:2.4rem; font-weight:700; line-height:1; color:var(--ink); }
 .hero-buttons{
@@ -498,31 +495,6 @@ input:focus, textarea:focus, select:focus{
 
 /* Participant picker + form (Individual Notes) */
 .form-panel{ display:flex; flex-direction:column; gap:20px; }
-.form-body{ display:flex; flex-direction:column; gap:20px; }
-.form-field{ display:flex; flex-direction:column; gap:6px; }
-.form-field label{ font-size:.85rem; font-weight:600; color:var(--muted); }
-.form-field input,
-.form-field select,
-.form-field textarea{
-  width:100%;
-  padding:.6rem .75rem;
-  border:1px solid var(--line);
-  border-radius:12px;
-  background:#fff;
-  color:var(--ink);
-  font-size:.95rem;
-  transition:border-color .15s ease, box-shadow .15s ease;
-}
-.form-field select{ height:var(--control-h); background:#fff; }
-.form-field textarea{ min-height:110px; resize:vertical; }
-.form-field input:focus,
-.form-field select:focus,
-.form-field textarea:focus{
-  border-color:var(--accent);
-  box-shadow:0 0 0 3px rgba(59,130,246,.12);
-  outline:none;
-}
-.form-field [data-readonly]{ background:rgba(148,163,184,.14); color:#475467; }
 .participant-picker{ display:flex; flex-direction:column; gap:16px; }
 .participant-manual{ display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
 .participant-manual input{ flex:1 1 220px; }
@@ -548,8 +520,7 @@ input:focus, textarea:focus, select:focus{
 .suggest-menu li:hover, .suggest-menu li.active{ background:#f1f5ff; }
 .form-panel .grid-3{ display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); }
 .form-notes textarea{ min-height:120px; }
-.form-actions{ display:flex; justify-content:flex-end; gap:12px; flex-wrap:wrap; }
-.form-foot{ border-top:1px solid var(--line); padding-top:12px; margin-top:4px; }
+.form-actions{ display:flex; justify-content:flex-end; }
 
 .recent-list{ display:flex; flex-direction:column; gap:12px; }
 .recent-list .card{ width:100%; }
