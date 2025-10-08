@@ -10,47 +10,98 @@
     <?!= include('Style'); ?>
   </head>
   <body>
-    <div class="panel" style="max-width:980px;margin:0 auto;">
-      <h1>Individual Notes</h1>
-      <p class="desc">Create one contact session and attach one or more students. Fields are trimmed to the essentials.</p>
-
-      <!-- Students (multi) -->
-      <label>Students</label>
-      <div class="panel" style="padding:12px;">
-        <div id="studentChips" class="chips" style="margin-bottom:8px;"></div>
-        <div class="suggest-wrap">
-          <input id="studentInput" type="text" placeholder="Type name or ID to add…" autocomplete="off" />
-          <ul id="studentSuggest" class="suggest-menu"></ul>
+    <div class="app-shell">
+      <section class="hero panel">
+        <div class="hero-content">
+          <div>
+            <h1>Individual Contacts</h1>
+            <p class="desc">Log one-on-one touchpoints, stage students from the queue, and share context with your team.</p>
+          </div>
+          <div class="hero-controls" role="group" aria-label="Contact actions">
+            <div class="hero-field hero-stat">
+              <span class="label">Selected students</span>
+              <span id="selectedCount" class="hero-number">0</span>
+            </div>
+            <div class="hero-buttons">
+              <button id="clearBtn" type="button" class="btn btn-ghost">Clear form</button>
+            </div>
+          </div>
         </div>
-        <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
-          <input id="manualId" type="text" placeholder="Add by ID (e.g., 123456789)" style="max-width:280px;" />
-          <button id="addIdBtn" type="button" class="btn btn-ghost">Add ID</button>
-          <span class="muted" id="whoLine"></span>
+        <div class="status-wrap">
+          <div id="status" class="status-pill" role="status" aria-live="polite" hidden></div>
         </div>
+      </section>
+
+      <section class="stats-grid" aria-label="Contact summary">
+        <article class="stat-card stat-total">
+          <h2>Selected</h2>
+          <p id="statSelected" class="stat-value">0</p>
+          <span class="stat-footnote">Students queued for this note</span>
+        </article>
+        <article class="stat-card stat-ready">
+          <h2>Mentor</h2>
+          <p id="statMentor" class="stat-value">0</p>
+          <span class="stat-footnote">Mentors tagged on the session</span>
+        </article>
+        <article class="stat-card stat-attention">
+          <h2>Recent saved</h2>
+          <p id="statRecent" class="stat-value">0</p>
+          <span class="stat-footnote">Notes logged in the last week</span>
+        </article>
+      </section>
+
+      <div class="layout-stack">
+        <section class="panel form-panel">
+          <header class="section-head">
+            <div class="section-title">
+              <h2>Participants</h2>
+              <p>Search by name or ID, or paste from the queue tray.</p>
+            </div>
+          </header>
+          <div class="participant-picker">
+            <div id="studentChips" class="chips"></div>
+            <div class="suggest-wrap">
+              <input id="studentInput" type="text" placeholder="Type 3+ characters (name or ID)…" autocomplete="off" />
+              <ul id="studentSuggest" class="suggest-menu"></ul>
+            </div>
+            <div class="participant-manual">
+              <input id="manualId" type="text" placeholder="Add by ID (e.g., 123456789)" />
+              <button id="addIdBtn" type="button" class="btn btn-ghost">Add ID</button>
+            </div>
+            <span class="muted selection-count" id="whoLine"></span>
+          </div>
+        </section>
+
+        <section class="panel form-panel">
+          <header class="section-head">
+            <div class="section-title">
+              <h2>Contact details</h2>
+              <p>Core fields that sync to the individual contact tracker.</p>
+            </div>
+          </header>
+          <div id="indivForm" class="form-grid"></div>
+          <div class="form-notes">
+            <label for="notes">Notes</label>
+            <textarea id="notes" rows="4" placeholder="Concise narrative (include wins or follow-ups)…"></textarea>
+          </div>
+          <div class="form-actions">
+            <button id="saveBtn" type="button" class="btn btn-primary">Save contact</button>
+          </div>
+        </section>
+
+        <section class="panel recent-panel">
+          <header class="section-head">
+            <div class="section-title">
+              <h2>Recent notes</h2>
+              <p>Latest entries per selected student.</p>
+            </div>
+          </header>
+          <div id="recent" class="recent-list"></div>
+        </section>
       </div>
-
-      <!-- Form fields (FIELDS-driven) -->
-      <div id="indivForm" style="margin-top:16px;"></div>
-
-      <!-- Notes -->
-      <div style="margin-top:6px;">
-        <label for="notes">Notes</label>
-        <textarea id="notes" rows="4" placeholder="Concise narrative (use for special concerns too)…"></textarea>
-      </div>
-
-      <div class="note-actions" style="margin-top:10px;">
-        <span id="status" class="status"></span>
-        <div style="display:flex; gap:10px;">
-          <button id="saveBtn" type="button" class="btn btn-primary">Save</button>
-          <button id="clearBtn" type="button" class="btn btn-ghost">Clear</button>
-        </div>
-      </div>
-
-      <div class="hr"></div>
-      <h3 style="margin:0 0 8px;">Recent (per student)</h3>
-      <div id="recent"></div>
     </div>
 
+    <?!= include('Suggest'); ?>
     <?!= include('IndividualNotesScript'); ?>
   </body>
 </html>

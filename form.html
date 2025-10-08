@@ -11,39 +11,74 @@
 
   </head>
   <body>
-    <div class="card">
-      <h1>Editor – Live ID Lookup</h1>
-      <p class="desc">Type a <b>name or ID</b> to get suggestions from <em>2025</em>, or look up by ID to auto-fill and save to <em>2026</em>.</p>
+    <div class="app-shell">
+      <section class="hero panel">
+        <div class="hero-content">
+          <div>
+            <h1>Participant Editor</h1>
+            <p class="desc">Search the current roster, auto-fill live details, and save refreshed records into <strong>2026</strong>.</p>
+          </div>
+          <div class="hero-controls" role="group" aria-label="Lookup controls">
+            <label class="hero-field hero-search" for="personSearch">
+              <span class="label">Search student</span>
+              <div class="suggest-wrap">
+                <input id="personSearch" type="text" placeholder="e.g., Jane, Doe, 123456" autocomplete="off" />
+                <ul id="suggestList" class="suggest-menu"></ul>
+              </div>
+              <span class="helper-text">Type at least 2 characters. Use ↑/↓ and Enter to pick.</span>
+            </label>
+            <label class="hero-field" for="lookupId">
+              <span class="label">CPS ID number</span>
+              <input id="lookupId" type="text" placeholder="e.g., 123456789" autocomplete="off" />
+            </label>
+            <div class="hero-buttons">
+              <button id="searchBtn" class="btn btn-primary" type="button">Lookup</button>
+              <button id="clearBtn" class="btn btn-ghost" type="button">Clear</button>
+            </div>
+          </div>
+        </div>
+        <div class="status-wrap">
+          <div id="statusBanner" class="status-pill" role="status" aria-live="polite" hidden></div>
+        </div>
+      </section>
 
-      <label for="personSearch">Search student (First, Last, or ID)</label>
-      <div class="inline suggest-wrap">
-        <input id="personSearch" type="text" placeholder="e.g., Jane, Doe, 123456" autocomplete="off" />
-        <ul id="suggestList" class="suggest-menu"></ul>
-      </div>
-      <p class="muted">Type at least 2 characters. Use ↑/↓ and Enter to select.</p>
+      <section class="stats-grid" aria-label="Record summary">
+        <article class="stat-card stat-total">
+          <h2>Fields loaded</h2>
+          <p id="statFields" class="stat-value">0</p>
+          <span class="stat-footnote">Populated from lookup</span>
+        </article>
+        <article class="stat-card stat-ready">
+          <h2>Core identifiers</h2>
+          <p id="statRequired" class="stat-value">0/4</p>
+          <span class="stat-footnote">Ready for submission</span>
+        </article>
+        <article class="stat-card stat-attention">
+          <h2>Still missing</h2>
+          <p id="statMissing" class="stat-value">4</p>
+          <span class="stat-footnote">Required fields empty</span>
+        </article>
+      </section>
 
-      <div class="hr" style="height:1px;background:var(--line);margin:20px 0;"></div>
-
-      <label for="lookupId">CPS ID Number (Lookup)</label>
-      <div class="inline">
-        <input id="lookupId" type="text" placeholder="e.g., 123456789" autocomplete="off" />
-        <button id="searchBtn" type="button" class="ghost">Search</button>
-      </div>
-
-      <div class="status" id="statusTop"></div>
-      <div class="hr" style="height:1px;background:var(--line);margin:20px 0;"></div>
-
-      <div id="formContainer"></div>
-
-      <div class="actions" style="margin-top:20px; display:flex; gap:12px; flex-wrap:wrap;">
-        <button class="primary" id="saveBtn" type="button">Save to 2026</button>
-        <button class="ghost" id="clearBtn" type="button" onclick="clearForm()">Clear</button>
-      </div>
-
-      <div class="status" id="statusBottom"></div>
-      <div class="muted">Timestamp is set automatically on save.</div>
+      <section class="panel form-panel">
+        <header class="section-head">
+          <div class="section-title">
+            <h2>Participant details</h2>
+            <p>Review, edit, and confirm before saving to the new program year.</p>
+          </div>
+        </header>
+        <div id="formContainer" class="form-body"></div>
+        <div class="form-actions">
+          <button id="saveBtn" class="btn btn-primary" type="button">Save to 2026</button>
+          <button id="footerClearBtn" class="btn btn-ghost" type="button">Clear form</button>
+        </div>
+        <footer class="form-foot">
+          <p class="muted">Timestamp updates automatically when a record is saved.</p>
+        </footer>
+      </section>
     </div>
 
+    <?!= include('Suggest'); ?>
     <?!= include('FormScript'); ?>
   </body>
 </html>

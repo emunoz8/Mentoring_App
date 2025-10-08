@@ -1,0 +1,167 @@
+<!-- Shared suggestion wiring helpers -->
+<script>
+(() => {
+  const global = window.AppSuggest = window.AppSuggest || {};
+  const getEl = (ref) => (typeof ref === 'string' ? document.getElementById(ref) : ref);
+  const defaultRun = () => (window.google && google.script && google.script.run) || null;
+  global.wireRemoteSuggest = function wireRemoteSuggest(options = {}) {
+    const {
+      input: inputRef,
+      list: listRef,
+      run = defaultRun,
+      rpc = 'suggestPeople',
+      minChars = 3,
+      limit = 10,
+      debounceMs = 220,
+      placeholder,
+      formatLabel = (item) => item && item.label ? String(item.label) : '',
+      onChoose,
+      clearOnChoose = true,
+      manualInput: manualInputRef,
+      manualButton: manualButtonRef,
+      onManualAdd,
+    } = options;
+
+    const input = getEl(inputRef);
+    const list = getEl(listRef);
+    if (!input || !list) return () => {};
+
+    if (placeholder) input.placeholder = placeholder;
+
+    const manualInput = getEl(manualInputRef);
+    const manualButton = getEl(manualButtonRef);
+
+    let items = [];
+    let active = -1;
+    let pending = 0;
+    const cache = new Map();
+
+    const debounce = (fn, ms = 200) => {
+      let t;
+      return (...args) => {
+        clearTimeout(t);
+        t = setTimeout(() => fn(...args), ms);
+      };
+    };
+
+    function closeMenu() {
+      list.style.display = 'none';
+      active = -1;
+    }
+
+    function render(results) {
+      const arr = Array.isArray(results) ? results.slice(0, limit) : [];
+      items = arr.map((it) => ({ ...it, label: formatLabel(it) || String(it.label || '') }));
+      active = -1;
+      list.innerHTML = '';
+      if (!items.length) {
+        closeMenu();
+        return;
+      }
+      items.forEach((it, idx) => {
+        const li = document.createElement('li');
+        li.className = 'suggest-item';
+        li.textContent = it.label || '';
+        li.addEventListener('mouseenter', () => setActive(idx));
+        li.addEventListener('mouseleave', () => setActive(-1));
+        li.addEventListener('mousedown', (e) => { e.preventDefault(); choose(idx); });
+        li.addEventListener('click', () => choose(idx));
+        list.appendChild(li);
+      });
+      list.style.display = 'block';
+    }
+
+    function setActive(idx) {
+      Array.from(list.children).forEach((el, i) => el.classList.toggle('active', i === idx));
+      active = idx;
+    }
+
+    function choose(idx) {
+      const it = items[idx];
+      if (!it) return;
+      if (typeof onChoose === 'function') onChoose(it);
+      if (clearOnChoose) input.value = '';
+      closeMenu();
+    }
+
+    const doSuggest = debounce(() => {
+      const q = (input.value || '').trim();
+      if (q.length < minChars) {
+        render([]);
+        return;
+      }
+      if (cache.has(q)) {
+        render(cache.get(q));
+        return;
+      }
+      const runner = typeof run === 'function' ? run() : null;
+      if (!runner || typeof runner.withSuccessHandler !== 'function') {
+        render([]);
+        return;
+      }
+      const callId = ++pending;
+      const proxy = runner
+        .withSuccessHandler((res) => {
+          if (callId !== pending) return;
+          cache.set(q, res || []);
+          render(res || []);
+        })
+        .withFailureHandler(() => {
+          if (callId !== pending) return;
+          render([]);
+        });
+      if (typeof proxy[rpc] === 'function') {
+        proxy[rpc](q, limit);
+      } else if (typeof proxy[rpc] === 'undefined') {
+        // fall back to default suggestPeople signature
+        if (typeof proxy.suggestPeople === 'function') proxy.suggestPeople(q, limit);
+      }
+    }, debounceMs);
+
+    function onInput() { doSuggest(); }
+    function onKeyDown(e) {
+      if (list.style.display === 'none' || !items.length) return;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActive(Math.min(items.length - 1, active + 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActive(Math.max(0, active - 1));
+      } else if (e.key === 'Enter') {
+        if (active >= 0) {
+          e.preventDefault();
+          choose(active);
+        }
+      } else if (e.key === 'Escape') {
+        closeMenu();
+      }
+    }
+
+    function onDocumentClick(e) {
+      if (!list.contains(e.target) && e.target !== input) closeMenu();
+    }
+
+    input.addEventListener('input', onInput);
+    input.addEventListener('keydown', onKeyDown);
+    document.addEventListener('click', onDocumentClick);
+
+    let manualHandler = null;
+    if (manualButton && typeof onManualAdd === 'function') {
+      manualHandler = () => {
+        const id = (manualInput && manualInput.value ? manualInput.value : '').trim();
+        if (!id) return;
+        onManualAdd(id);
+        if (manualInput) manualInput.value = '';
+      };
+      manualButton.addEventListener('click', manualHandler);
+    }
+
+    return () => {
+      input.removeEventListener('input', onInput);
+      input.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('click', onDocumentClick);
+      if (manualButton && manualHandler) manualButton.removeEventListener('click', manualHandler);
+    };
+  };
+})();
+</script>

@@ -16,6 +16,51 @@ const STATUS  = { PENDING: 'Pending', CLAIMED: 'Claimed', PROCESSED: 'Processed'
 // normalize header key
 function _normKey_(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,''); }
 
+/** Normalize + dedupe sheet row indices (1-based) */
+function normalizeRowIndices_(list) {
+  const seen = new Set();
+  const rows = [];
+  (Array.isArray(list) ? list : []).forEach(n => {
+    const num = Number(n);
+    if (!Number.isFinite(num)) return;
+    const rn = Math.floor(num);
+    if (rn < 2) return;
+    if (seen.has(rn)) return;
+    seen.add(rn);
+    rows.push(rn);
+  });
+  rows.sort((a,b) => a - b);
+  return rows;
+}
+
+/** Batch writer for a single column (0-based). Accepts sparse, non-contiguous row indices. */
+function writeColumnValues_(sheet, zeroBasedCol, rowIndices, values) {
+  if (zeroBasedCol == null) return;
+  if (!rowIndices?.length || !values?.length) return;
+  if (rowIndices.length !== values.length) throw new Error('Row/value length mismatch.');
+
+  const sorted = rowIndices.map((rn, i) => ({ rn, i })).sort((a,b) => a.rn - b.rn);
+  let cursor = 0;
+  while (cursor < sorted.length) {
+    let runEnd = cursor + 1;
+    let expected = sorted[cursor].rn;
+    while (runEnd < sorted.length && sorted[runEnd].rn === expected + 1) {
+      expected = sorted[runEnd].rn;
+      runEnd++;
+    }
+
+    const height = runEnd - cursor;
+    const topRow = sorted[cursor].rn;
+    const data = [];
+    for (let idx = cursor; idx < runEnd; idx++) {
+      data.push([values[sorted[idx].i]]);
+    }
+    sheet.getRange(topRow, zeroBasedCol + 1, height, 1).setValues(data);
+
+    cursor = runEnd;
+  }
+}
+
 /** Ensure sheet + tolerant header map (seed status columns if missing) */
 function queue_ensureSignInLogSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -123,12 +168,9 @@ function listQueue(dateStr) {
       else mentorId = mentorRaw.toUpperCase();
     }
 
-    // --- existing lines ---
-    // Normalize status
     const rawStatus = String(C.Status != null ? r[C.Status] : '').trim();
     const lowered = rawStatus.toLowerCase();
 
-    // NEW: read ProcessedAt + ContactID
     const processedAtVal = (C.ProcessedAt != null) ? r[C.ProcessedAt] : null;
     const hasProcessed   = !!processedAtVal;
     const contactIdCell  = (C.ContactID != null) ? String(r[C.ContactID] || '').trim() : '';
@@ -161,7 +203,7 @@ function listQueue(dateStr) {
       mentorName,
       status,
       claimedBy,
-      contactId: contactIdCell, // <-- add this line
+      contactId: contactIdCell,
       mine: (!!me && claimedBy && claimedBy.toLowerCase() === me.toLowerCase())
     });
 
@@ -198,27 +240,35 @@ function claimRows(rowIndices, claimedByRaw) {
     (Session.getEffectiveUser && Session.getEffectiveUser().getEmail && Session.getEffectiveUser().getEmail()) ||
     'unknown';
 
-  const rows = (Array.isArray(rowIndices) ? rowIndices : [])
-    .map(n => Number(n))
-    .filter(n => Number.isFinite(n) && n >= 2);
+  const rows = normalizeRowIndices_(rowIndices);
 
   if (!rows.length) return { ok:false, error:'No rows provided.' };
 
   const failed = [];
+  const appliedRows = [];
+  const statusValues = [];
+  const claimedByValues = [];
+  const claimedAtValues = [];
   const lock = LockService.getDocumentLock();
   try {
     lock.waitLock(30000);
     rows.forEach(rn => {
+      if (rn > sh.getLastRow()) { failed.push(rn); return; }
+      if (C.Status == null) { failed.push(rn); return; }
       // If already processed, don't overwrite
       const cur = String(sh.getRange(rn, C.Status + 1).getValue() || '').trim().toLowerCase();
       if (cur === 'processed' || cur === STATUS.PROCESSED.toLowerCase()) { failed.push(rn); return; }
-
-      sh.getRange(rn, C.Status + 1).setValue(STATUS.CLAIMED);
-
-      // Optional: keep ClaimedBy/ClaimedAt updated if those columns exist
-      if (C.ClaimedBy != null) sh.getRange(rn, C.ClaimedBy + 1).setValue(who);
-      if (C.ClaimedAt != null) sh.getRange(rn, C.ClaimedAt + 1).setValue(now);
+      appliedRows.push(rn);
+      statusValues.push(STATUS.CLAIMED);
+      if (C.ClaimedBy != null) claimedByValues.push(who);
+      if (C.ClaimedAt != null) claimedAtValues.push(now);
     });
+
+    if (appliedRows.length) {
+      writeColumnValues_(sh, C.Status, appliedRows, statusValues);
+      if (C.ClaimedBy != null) writeColumnValues_(sh, C.ClaimedBy, appliedRows, claimedByValues);
+      if (C.ClaimedAt != null) writeColumnValues_(sh, C.ClaimedAt, appliedRows, claimedAtValues);
+    }
   } catch (e) {
     return { ok:false, error: e && e.message ? e.message : String(e) };
   } finally {
@@ -231,7 +281,7 @@ function claimRows(rowIndices, claimedByRaw) {
 /** Mark rows processed after note save (also writes ProcessedAt + ContactID) */
 function markProcessed(rowIndices, contactId) {
   const { sh, C } = queue_ensureSignInLogSheet_();
-  const rows = (Array.isArray(rowIndices) ? rowIndices : []).map(n => Number(n)||0).filter(n=>n>=2);
+  const rows = normalizeRowIndices_(rowIndices);
   if (!rows.length) return { ok:false, error:'No rows to mark processed.' };
 
   const lock = LockService.getDocumentLock();
@@ -239,19 +289,15 @@ function markProcessed(rowIndices, contactId) {
 
   try {
     lock.waitLock(30000);
-    rows.forEach(rn=>{
-      if (rn < 2 || rn > sh.getLastRow()) return;
+    const maxRow = sh.getLastRow();
+    const validRows = rows.filter(rn => rn <= maxRow);
+    if (!validRows.length) return { ok:true, rows: 0, contactId: contactId || '' };
 
-      // Status -> Processed
-      sh.getRange(rn, C.Status + 1).setValue(STATUS.PROCESSED);
-
-      // ProcessedAt -> now
-      if (C.ProcessedAt != null) sh.getRange(rn, C.ProcessedAt + 1).setValue(now);
-
-      // ContactID -> saved contact id
-      if (C.ContactID != null) sh.getRange(rn, C.ContactID + 1).setValue(String(contactId || '').trim());
-    });
-    return { ok:true, rows: rows.length, contactId: contactId||'' };
+    const contactValue = String(contactId || '').trim();
+    if (C.Status != null) writeColumnValues_(sh, C.Status, validRows, validRows.map(() => STATUS.PROCESSED));
+    if (C.ProcessedAt != null) writeColumnValues_(sh, C.ProcessedAt, validRows, validRows.map(() => now));
+    if (C.ContactID != null) writeColumnValues_(sh, C.ContactID, validRows, validRows.map(() => contactValue));
+    return { ok:true, rows: validRows.length, contactId: contactValue };
   } catch (e) {
     return { ok:false, error: e && e.message ? e.message : String(e) };
   } finally {
@@ -360,13 +406,21 @@ function markProcessedByIds(dateStr, ids, contactId, statusOpt) {
   const lock = LockService.getDocumentLock();
   try {
     lock.waitLock(30000);
-    toUpdate.forEach(rn => {
-      if (C.Status != null)      sh.getRange(rn, C.Status + 1).setValue(newStatusValues.get(rn) || newStatus);
-      if (C.ContactID != null)   sh.getRange(rn, C.ContactID + 1).setValue(newContactValues.get(rn) || '');
-      if (C.ProcessedAt != null && contactId) {
-        sh.getRange(rn, C.ProcessedAt + 1).setValue(newProcessedAt.get(rn) || now);
+    const normalized = normalizeRowIndices_(toUpdate);
+    if (normalized.length) {
+      if (C.Status != null) {
+        const statusVals = normalized.map(rn => newStatusValues.get(rn) || newStatus);
+        writeColumnValues_(sh, C.Status, normalized, statusVals);
       }
-    });
+      if (C.ContactID != null) {
+        const contactVals = normalized.map(rn => newContactValues.get(rn) || '');
+        writeColumnValues_(sh, C.ContactID, normalized, contactVals);
+      }
+      if (C.ProcessedAt != null && contactId) {
+        const processedVals = normalized.map(rn => newProcessedAt.get(rn) || now);
+        writeColumnValues_(sh, C.ProcessedAt, normalized, processedVals);
+      }
+    }
     return { ok:true, matched: toUpdate.length, rows: toUpdate };
   } catch (e) {
     return { ok:false, error: e && e.message ? e.message : String(e) };
