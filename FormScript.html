@@ -84,6 +84,8 @@ const FIELDS = [
   { key:'comments',            label:'Comments / Concerns', type:'textarea' },
 ];
 
+const REQUIRED_FIELDS = ['firstName','lastName','cpsIdNumber','intakeDate'];
+
 /* ---- Utils ---- */
 const $ = (id)=>document.getElementById(id);
 
@@ -100,8 +102,52 @@ function calcAgeYMD(birthYMD, refYMD){
   const r=refYMD?new Date(refYMD+'T00:00:00'):new Date(); if(isNaN(r)) return '';
   let age=r.getFullYear()-b.getFullYear(); const m=r.getMonth()-b.getMonth(); if(m<0||(m===0&&r.getDate()<b.getDate())) age--; return age;
 }
-function updateAgeField(){ const birth=$('birthDate')?.value||''; const intake=$('intakeDate')?.value||''; const age=calcAgeYMD(birth,intake); const el=$('ageAtIntake'); if(el) el.value=(age===''?'':String(age)); }
-function setStatus(msg, ok=false){ ['statusTop','statusBottom'].forEach(id=>{ const el=$(id); if(!el) return; el.textContent=msg||''; el.className='status '+(ok?'ok':(msg?'err':'')); }); }
+function updateAgeField(){
+  const birthEl = $('birthDate');
+  const intakeEl = $('intakeDate');
+  const birth = birthEl ? birthEl.value || '' : '';
+  const intake = intakeEl ? intakeEl.value || '' : '';
+  const age = calcAgeYMD(birth, intake);
+  const out = $('ageAtIntake');
+  if(out) out.value = (age === '' ? '' : String(age));
+}
+
+function setStatus(message, state){
+  const pill = $('statusBanner');
+  if(!pill) return;
+  if(typeof state === 'boolean') state = state ? 'ok' : (message ? 'bad' : 'info');
+  const mode = state || (message ? 'info' : '');
+  if(!message){
+    pill.hidden = true;
+    pill.textContent = '';
+    pill.removeAttribute('data-state');
+    return;
+  }
+  pill.hidden = false;
+  pill.dataset.state = mode;
+  pill.textContent = message;
+}
+
+function updateStats(){
+  let filled = 0;
+  let requiredFilled = 0;
+  FIELDS.forEach(f=>{
+    const el = $(f.key);
+    if(!el) return;
+    const val = (el.value || '').trim();
+    if(val) filled++;
+    if(REQUIRED_FIELDS.indexOf(f.key) !== -1 && val){
+      requiredFilled++;
+    }
+  });
+  const missing = Math.max(0, REQUIRED_FIELDS.length - requiredFilled);
+  const statFields = $('statFields');
+  const statRequired = $('statRequired');
+  const statMissing = $('statMissing');
+  if(statFields) statFields.textContent = String(filled);
+  if(statRequired) statRequired.textContent = `${requiredFilled}/${REQUIRED_FIELDS.length}`;
+  if(statMissing) statMissing.textContent = String(missing);
+}
 
 /* ---- Build form ---- */
 function buildForm(){
@@ -111,16 +157,18 @@ function buildForm(){
   grid.className = 'grid-3';
   FIELDS.forEach(f=>{
     const wrap=document.createElement('div');
+    wrap.className='form-field';
     const label=document.createElement('label'); label.setAttribute('for', f.key); label.textContent=f.label;
     let input;
     if(f.type==='textarea'){ input=document.createElement('textarea'); input.rows=3; wrap.style.gridColumn='1 / -1'; }
     else if(f.type==='select'){ input=document.createElement('select'); (f.options||[]).forEach(opt=>{ const o=document.createElement('option'); o.value=opt; o.textContent=opt; input.appendChild(o); }); }
-    else { input=document.createElement('input'); input.type=f.type||'text'; if(f.readonly){ input.readOnly=true; input.style.background='#f9fafb'; } }
+    else { input=document.createElement('input'); input.type=f.type||'text'; if(f.readonly){ input.readOnly=true; input.setAttribute('data-readonly',''); } }
     input.id=f.key; if(input.tagName!=='SELECT') input.placeholder=f.label;
     wrap.appendChild(label); wrap.appendChild(input); grid.appendChild(wrap);
   });
   container.appendChild(grid);
   const intakeEl=$('intakeDate'); if(intakeEl) intakeEl.value=todayYMD();
+  updateStats();
 }
 
 /* ---- Fill/Clear ---- */
@@ -138,14 +186,25 @@ function fillForm(rec){
     } else { el.value = String(val); }
   });
   updateAgeField();
+  updateStats();
 }
 function clearForm(){
-  $('lookupId').value=''; $('personSearch').value=''; $('suggestList').style.display='none';
+  const lookup=$('lookupId'); if(lookup) lookup.value='';
+  const person=$('personSearch'); if(person) person.value='';
+  const list=$('suggestList'); if(list) list.style.display='none';
   FIELDS.forEach(f=>{ const el=$(f.key); if(el) el.value=''; });
   const intakeEl=$('intakeDate'); if(intakeEl) intakeEl.value=todayYMD();
-  setStatus(''); $('personSearch').focus();
+  syncLookupToField();
+  updateStats();
+  setStatus('');
+  if(person) person.focus();
 }
-function syncLookupToField(){ const v=$('lookupId').value.trim(); const el=$('cpsIdNumber'); if(el) el.value=v; }
+function syncLookupToField(){
+  const lookup=$('lookupId');
+  const idVal = lookup ? lookup.value.trim() : '';
+  const el=$('cpsIdNumber');
+  if(el) el.value=idVal;
+}
 
 /* ---- Search by ID ---- */
 let lastReqId = 0;
@@ -153,19 +212,20 @@ function wireSearch(){
   const btn=$('searchBtn'), input=$('lookupId'); if(!btn||!input) return;
   btn.addEventListener('click',(e)=>{
     e.preventDefault();
-    const id=input.value.trim(); if(!id){ setStatus('Enter a CPS ID Number.'); return; }
-    syncLookupToField(); setStatus('Looking up CPS ID Number…');
+    const id=input.value.trim(); if(!id){ setStatus('Enter a CPS ID Number.', 'bad'); return; }
+    syncLookupToField(); setStatus('Looking up CPS ID Number…', 'info');
     const reqId=++lastReqId;
     google.script.run
       .withSuccessHandler(res=>{
         if(reqId!==lastReqId) return;
-        if(res && res.ok){ fillForm(res.record); $('intakeDate').value=todayYMD(); updateAgeField(); setStatus('Record found and auto-filled.', true); }
-        else { fillForm({}); $('cpsIdNumber').value=id; setStatus(res?.error || 'Not found.'); }
+        if(res && res.ok){ fillForm(res.record); $('intakeDate').value=todayYMD(); updateAgeField(); setStatus('Record found and auto-filled.', 'ok'); }
+        else { fillForm({}); $('cpsIdNumber').value=id; updateStats(); setStatus(res && res.error ? res.error : 'Not found.', 'bad'); }
       })
-      .withFailureHandler(err=>{ if(reqId!==lastReqId) return; setStatus(err?.message || 'Lookup failed.'); console.error('lookupById failed:', err); })
+      .withFailureHandler(err=>{ if(reqId!==lastReqId) return; setStatus(err && err.message ? err.message : 'Lookup failed.', 'bad'); console.error('lookupById failed:', err); })
       .lookupById(id);
   });
   input.addEventListener('keydown',(e)=>{ if(e.key==='Enter'){ e.preventDefault(); $('searchBtn').click(); }});
+  input.addEventListener('input', syncLookupToField);
 }
 
 /* ---- Typeahead ---- */
@@ -183,6 +243,7 @@ function wireSuggest(){
     const it=items[idx]; if(!it) return;
     $('personSearch').value=it.label;
     $('firstName').value=it.firstName||''; $('lastName').value=it.lastName||''; $('cpsIdNumber').value=it.id||''; $('lookupId').value=it.id||'';
+    updateStats();
     list.style.display='none'; $('searchBtn').click();
   }
   const doSuggest=debounce(()=>{ const q=input.value.trim(); if(q.length<2){ render([]); return; }
@@ -202,28 +263,65 @@ function wireSuggest(){
 }
 
 /* ---- Save ---- */
-$('saveBtn')?.addEventListener('click', ()=>{
-  const btn=$('saveBtn'); if(btn.disabled) return; btn.disabled=true;
-  $('intakeDate').value=todayYMD();
-  const payload={}; FIELDS.forEach(f=>{ payload[f.key]= (($(f.key)?.value)||'').trim(); });
-  if(!payload.cpsIdNumber){ setStatus('Please enter a CPS ID Number before saving.'); $('lookupId').focus(); btn.disabled=false; return; }
-  setStatus('Saving…');
-  google.script.run
-    .withSuccessHandler(res=>{ if(res && res.ok){ setStatus('Saved to 2026 ✅', true); clearForm(); $('personSearch').focus(); } else { setStatus(res?.error||'Save failed.'); } btn.disabled=false; })
-    .withFailureHandler(err=>{ setStatus(err?.message||'Save failed.'); btn.disabled=false; })
-    .submitForm(payload);
-});
+const saveBtn=$('saveBtn');
+if(saveBtn){
+  saveBtn.addEventListener('click', ()=>{
+    if(saveBtn.disabled) return;
+    saveBtn.disabled=true;
+    const intake=$('intakeDate'); if(intake) intake.value=todayYMD();
+    const payload={};
+    FIELDS.forEach(f=>{
+      const el=$(f.key);
+      payload[f.key]= el ? String((el.value||'').trim()) : '';
+    });
+    if(!payload.cpsIdNumber){
+      setStatus('Please enter a CPS ID Number before saving.', 'bad');
+      const lookup=$('lookupId'); if(lookup) lookup.focus();
+      saveBtn.disabled=false;
+      return;
+    }
+    setStatus('Saving…', 'info');
+    google.script.run
+      .withSuccessHandler(res=>{
+        if(res && res.ok){
+          setStatus('Saved to 2026 ✅', 'ok');
+          clearForm();
+          const person=$('personSearch'); if(person) person.focus();
+        } else {
+          setStatus(res && res.error ? res.error : 'Save failed.', 'bad');
+        }
+        saveBtn.disabled=false;
+      })
+      .withFailureHandler(err=>{
+        setStatus(err && err.message ? err.message : 'Save failed.', 'bad');
+        saveBtn.disabled=false;
+      })
+      .submitForm(payload);
+  });
+}
 
 /* ---- Wire on load ---- */
-document.addEventListener('DOMContentLoaded', ()=>{
+function init(){
   buildForm();
-  // age updates when birth/intake change
   ['input','change'].forEach(evt=>{
-    $('birthDate') && $('birthDate').addEventListener(evt, updateAgeField);
-    $('intakeDate') && $('intakeDate').addEventListener(evt, updateAgeField);
+    const birth=$('birthDate'); if(birth) birth.addEventListener(evt, ()=>{ updateAgeField(); updateStats(); });
+    const intake=$('intakeDate'); if(intake) intake.addEventListener(evt, ()=>{ updateAgeField(); updateStats(); });
   });
   wireSearch();
   wireSuggest();
   const intakeEl=$('intakeDate'); if(intakeEl && !intakeEl.value) intakeEl.value=todayYMD();
-});
+  const formBody=$('formContainer');
+  if(formBody){
+    formBody.addEventListener('input', updateStats);
+    formBody.addEventListener('change', updateStats);
+  }
+  const clearTop=$('clearBtn'); if(clearTop) clearTop.addEventListener('click', clearForm);
+  const clearBottom=$('footerClearBtn'); if(clearBottom) clearBottom.addEventListener('click', clearForm);
+  updateStats();
+}
+if(document.readyState==='loading'){
+  document.addEventListener('DOMContentLoaded', init);
+}else{
+  init();
+}
 </script>

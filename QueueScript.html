@@ -6,27 +6,19 @@
   const todayYMD = () => new Date().toISOString().slice(0,10);
   const esc = s => String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-function statusClass(r) {
-  const hasContact = r.contactId && String(r.contactId).trim().length > 0;
-  const isClaimed = String(r.status || '').toLowerCase() === 'claimed';
-
-  if (hasContact) return 'muted';  // gray
-  if (isClaimed) return 'warn';    // orange
-  return 'ok';                     // green (pending)
-}
-
-function statusTitle(r) {
-  if (r.contactId && String(r.contactId).trim().length > 0) return 'Has Individual Note';
-  if (String(r.status || '').toLowerCase() === 'claimed') return 'Claimed';
-  return 'Pending';
-}
-
-
-
   function setStatus(msg, state){
-    const el = $$('status'); if (!el) return;
-    el.textContent = msg || '';
-    el.style.color = state==='bad' ? '#b00020' : state==='ok' ? '#16a34a' : 'var(--muted)';
+    const el = $$('status');
+    if (!el) return;
+    const tone = state === 'bad' ? 'bad' : state === 'ok' ? 'ok' : 'info';
+    if (!msg){
+      el.textContent = '';
+      el.dataset.state = 'info';
+      el.setAttribute('hidden','');
+      return;
+    }
+    el.textContent = msg;
+    el.dataset.state = tone;
+    el.removeAttribute('hidden');
   }
 
   // ---------- State ----------
@@ -45,92 +37,115 @@ function statusTitle(r) {
   function buildIndividualNotesUrl(ids, opts={}){
     const params = new URLSearchParams();
     params.set('page','IndividualNotes');
-    if (ids?.length) params.set('ids', encodeURIComponent(ids.join(',')));
+    if (ids?.length) params.set('ids', ids.join(','));
     if (opts.date)   params.set('date', opts.date);
     return BASE_URL + '?' + params.toString();
   }
 
+  function statusInfo(row){
+    const status = String(row?.status || 'Pending');
+    const hasNote = !!String(row?.contactId || '').trim();
+    if (status === 'Processed' || hasNote) {
+      return { status: 'Processed', dot: 'neutral', title: 'Processed', bucket: 'processed' };
+    }
+    if (status === 'Claimed') {
+      return { status: 'Claimed', dot: 'warn', title: 'Claimed', bucket: 'claimed' };
+    }
+    return { status: 'Pending', dot: 'ok', title: 'Pending', bucket: 'pending' };
+  }
+
+  const summaryEls = {
+    total: () => $$('statTotal'),
+    pending: () => $$('statPending'),
+    claimed: () => $$('statClaimed'),
+    processed: () => $$('statProcessed')
+  };
+
+  function renderSummary(rows){
+    const counts = { total: 0, pending: 0, claimed: 0, processed: 0 };
+    if (Array.isArray(rows)) {
+      counts.total = rows.length;
+      rows.forEach(r => {
+        const bucket = statusInfo(r)?.bucket || 'pending';
+        if (counts[bucket] != null) counts[bucket] += 1;
+      });
+    }
+    Object.entries(counts).forEach(([key, value]) => {
+      const elGetter = summaryEls[key];
+      const el = typeof elGetter === 'function' ? elGetter() : null;
+      if (el) el.textContent = value.toLocaleString();
+    });
+  }
+
   // ---------- Board (left column) ----------
-  function statusDotClass(s){
-    return s === 'Processed' ? 'bad'   // gray-ish? (you can style differently)
-         : s === 'Claimed'   ? 'warn'
-         : 'ok';
-  }
-
   function renderBoard(rows){
-    // rows expected: [{ id, nfunction renderBoard(rows){
-  const board = $$('board'); board.innerHTML = '';
-  if (!rows?.length){
-    const p = document.createElement('div');
-    p.className='muted';
-    p.textContent='No sign-ins for this date.';
-    board.appendChild(p);
-    return;
-  }
+    const board = $$('board');
+    board.innerHTML = '';
+    board.classList.toggle('is-empty', !rows?.length);
 
-  // group by school (or switch to mentor if you prefer)
-  const bySchool = new Map();
-  rows.forEach(r => {
-    const key = String(r.school||'').trim() || 'Other';
-    if (!bySchool.has(key)) bySchool.set(key, []);
-    bySchool.get(key).push(r);
-  });
+    if (!rows?.length){
+      const p = document.createElement('div');
+      p.className='empty-state';
+      p.innerHTML = '<strong>No sign-ins yet.</strong><br/>Try another date or confirm that the sign-in form has responses.';
+      board.appendChild(p);
+      return;
+    }
 
-  Array.from(bySchool.entries()).forEach(([school, list])=>{
-    const col = document.createElement('div');
-    col.className = 'group';
-    const h = document.createElement('h3');
-    h.textContent = school;
-    col.appendChild(h);
-
-    const cards = document.createElement('div');
-    cards.className = 'cards';
-    col.appendChild(cards);
-
-    list.forEach(r=>{
-      // map status -> class
-      const st = String(r.status || 'Pending');
-      const dotClass =
-        st === 'Processed' ? 'neutral' :
-        st === 'Claimed'   ? 'warn'    :
-                             'ok'; // Pending
-
-      const c = document.createElement('div');
-      c.className = `card status-${st.toLowerCase()}`;
-      c.draggable = true;
-      c.dataset.id = r.id;
-
-      c.innerHTML = `
-        <div class="card-header">
-          <span class="status-dot ${dotClass}" title="${esc(st)}"></span>
-          <div class="card-title">
-            <span class="name">${esc(r.name || r.displayName || r.id)}</span>
-            <span class="muted id-span">${esc(r.id)}</span>
-          </div>
-          <button class="menu-btn" title="Add to tray" aria-label="Add">+</button>
-        </div>
-        <div class="muted">Mentor: ${esc(r.mentor || r.mentorName || r.mentorId || '')}</div>
-      `;
-
-      // click to add to tray
-      c.querySelector('.menu-btn').addEventListener('click', () => addToTray(r));
-      c.addEventListener('click', (e) => {
-        // avoid double handling when + is clicked
-        if (e.target.closest('.menu-btn')) return;
-        addToTray(r);
-      });
-
-      // drag support
-      c.addEventListener('dragstart', (e)=>{
-        e.dataTransfer.setData('text/plain', JSON.stringify(r));
-      });
-
-      cards.appendChild(c);
+    const bySchool = new Map();
+    rows.forEach(r => {
+      const key = String(r.school||'').trim() || 'Other';
+      if (!bySchool.has(key)) bySchool.set(key, []);
+      bySchool.get(key).push(r);
     });
 
-    board.appendChild(col);
-  });
-}
+    Array.from(bySchool.entries()).forEach(([school, list])=>{
+      const col = document.createElement('div');
+      col.className = 'group';
+
+      const h = document.createElement('h3');
+      h.textContent = school;
+      col.appendChild(h);
+
+      const cards = document.createElement('div');
+      cards.className = 'cards';
+      col.appendChild(cards);
+
+      list.forEach(r=>{
+        const meta = statusInfo(r);
+        const c = document.createElement('div');
+        c.className = `card status-${meta.bucket}`;
+        c.draggable = true;
+        c.dataset.id = r.id;
+        c.dataset.status = meta.bucket;
+
+        c.innerHTML = `
+          <div class="card-header">
+            <span class="status-dot ${meta.dot}" title="${esc(meta.title)}"></span>
+            <div class="card-title">
+              <span class="name">${esc(r.name || r.displayName || r.id)}</span>
+              <span class="muted id-span">${esc(r.id)}</span>
+            </div>
+            <button class="menu-btn" title="Add to tray" aria-label="Add">+</button>
+          </div>
+          <div class="muted">Mentor: ${esc(r.mentor || r.mentorName || r.mentorId || '')}</div>
+        `;
+
+        c.querySelector('.menu-btn').addEventListener('click', () => addToTray(r));
+        c.addEventListener('click', (e) => {
+          if (e.target.closest('.menu-btn')) return;
+          addToTray(r);
+        });
+
+        c.addEventListener('dragstart', (e)=>{
+          e.dataTransfer.setData('text/plain', JSON.stringify(r));
+        });
+
+        cards.appendChild(c);
+      });
+
+      board.appendChild(col);
+    });
+  }
 
 
   // ---------- Tray (middle column) ----------
@@ -163,7 +178,7 @@ function statusTitle(r) {
     const box = $$('trayDrop');
     box.innerHTML = '';
     if (!tray.length){
-      box.innerHTML = '<div class="muted">Drag cards here (or click a card) to add to the tray.</div>';
+      box.innerHTML = '<div class="muted empty-hint">Drag cards here (or tap a card) to add to the tray.</div>';
     } else {
       tray.forEach(t=>{
         const c = document.createElement('div');
@@ -183,17 +198,26 @@ function statusTitle(r) {
         box.appendChild(c);
       });
     }
-    $$('trayCount').textContent = `${tray.length} selected`;
+    const countLabel = tray.length === 1 ? '1 student staged' : `${tray.length} students staged`;
+    $$('trayCount').textContent = tray.length ? countLabel : 'Tray is empty';
+
+    const clearBtn = $$('clearTrayBtn');
+    if (clearBtn) clearBtn.disabled = tray.length === 0;
+    const openBtn = $$('openNotesBtn');
+    if (openBtn) openBtn.disabled = tray.length === 0;
+    const claimBtn = $$('claimTrayBtn');
+    if (claimBtn) claimBtn.disabled = tray.length === 0;
   }
 
   // Drop target behavior
   function wireTrayDnD(){
     const drop = $$('trayDrop');
-    drop.addEventListener('dragover', (e)=>{ e.preventDefault(); drop.style.borderColor = '#cfe0ff'; });
-    drop.addEventListener('dragleave', ()=>{ drop.style.borderColor = 'var(--line)'; });
+    drop.addEventListener('dragenter', (e)=>{ e.preventDefault(); drop.classList.add('is-active'); });
+    drop.addEventListener('dragover', (e)=>{ e.preventDefault(); drop.classList.add('is-active'); });
+    drop.addEventListener('dragleave', ()=>{ drop.classList.remove('is-active'); });
     drop.addEventListener('drop', (e)=>{
       e.preventDefault();
-      drop.style.borderColor = 'var(--line)';
+      drop.classList.remove('is-active');
       try {
         const r = JSON.parse(e.dataTransfer.getData('text/plain'));
         addToTray(r);
@@ -235,11 +259,14 @@ function statusTitle(r) {
     setStatus('Loading…');
     run()
       ?.withSuccessHandler(rows=>{
-        renderBoard(rows || []);
+        const list = rows || [];
+        renderBoard(list);
+        renderSummary(list);
         setStatus(`Loaded ${rows?.length||0} sign-in(s).`, 'ok');
       })
       .withFailureHandler(err=>{
         renderBoard([]);
+        renderSummary([]);
         setStatus(err?.message || 'Failed to load sign-ins.', 'bad');
       })
       .getSignInsByDate(dYMD);
@@ -258,7 +285,9 @@ function statusTitle(r) {
     $$('claimTrayBtn')?.addEventListener('click', onClaimTray);
 
     wireTrayDnD();
+    renderBoard([]);
     renderTray();
+    renderSummary([]);
     loadForDate(di.value);
   });
 })();

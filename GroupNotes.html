@@ -6,16 +6,86 @@
     <?!= include('Style'); ?>  <!-- injects CSS -->
   </head>
   <body>
-    <!-- Top toolbar -->
-    <div class="controls">
-      <label>Date: <input type="date" id="datePicker" /></label>
-      <button id="loadBtn" type="button">Load</button>
-      <span id="status" class="status"></span>
-    </div>
+    <div class="app-shell">
+      <section class="hero panel">
+        <div class="hero-content">
+          <div>
+            <h1>Group Notes</h1>
+            <p class="desc">Review weekly rosters, see who is ready, and capture group notes without leaving the page.</p>
+          </div>
+          <div class="hero-controls" role="group" aria-label="Group note filters">
+            <label class="hero-field" for="datePicker">
+              <span class="label">Circle date</span>
+              <input id="datePicker" type="date" />
+            </label>
+            <div class="hero-buttons">
+              <button id="loadBtn" class="btn btn-primary" type="button">Refresh roster</button>
+            </div>
+          </div>
+        </div>
+        <div class="status-wrap">
+          <div id="status" class="status-pill" role="status" aria-live="polite" hidden></div>
+        </div>
+      </section>
 
-    <!-- Groups board (uses your #board grid styles). data-groupnotes is harmless now,
-         but lets you scope CSS later if needed without changing HTML again. -->
-    <div id="board" data-groupnotes></div>
+      <section class="stats-grid" aria-label="Roster summary">
+        <article class="stat-card stat-total">
+          <h2>Participants</h2>
+          <p id="statParticipants" class="stat-value">0</p>
+          <span id="statGroupsFootnote" class="stat-footnote">Across active groups</span>
+        </article>
+        <article class="stat-card stat-ready">
+          <h2>All set</h2>
+          <p id="statReady" class="stat-value">0</p>
+          <span class="stat-footnote">Cleared for programming</span>
+        </article>
+        <article class="stat-card stat-attention">
+          <h2>Needs items</h2>
+          <p id="statNeeds" class="stat-value">0</p>
+          <span class="stat-footnote">Consent or pre-work pending</span>
+        </article>
+        <article class="stat-card stat-risk">
+          <h2>Not in DB</h2>
+          <p id="statNoDb" class="stat-value">0</p>
+          <span class="stat-footnote">Requires intake follow-up</span>
+        </article>
+      </section>
+
+      <div class="layout-grid layout-two">
+        <section class="board-panel panel">
+          <header class="section-head">
+            <div class="section-title">
+              <h2>Groups</h2>
+              <p>Drag students between groups and jot down circle notes in one place.</p>
+            </div>
+          </header>
+          <div id="board" class="board" data-groupnotes></div>
+        </section>
+
+        <aside class="insights-panel panel" aria-labelledby="groupTipsHeading">
+          <header class="section-head">
+            <div class="section-title">
+              <h2 id="groupTipsHeading">Quick tips</h2>
+              <p>Keep every circle on track.</p>
+            </div>
+          </header>
+          <ul class="tips-list">
+            <li>
+              <strong>Status colors</strong>
+              <span>Mint dots are ready, amber needs attention, red means follow up on intake.</span>
+            </li>
+            <li>
+              <strong>Mentor chips</strong>
+              <span>Search by name to tag who led the circle. Add multiple mentors if needed.</span>
+            </li>
+            <li>
+              <strong>Drag &amp; drop</strong>
+              <span>Move students across groups to match the latest roster before saving notes.</span>
+            </li>
+          </ul>
+        </aside>
+      </div>
+    </div>
 
     <!-- Details modal -->
     <div id="detailModal" class="modal-backdrop" role="dialog" aria-modal="true">
