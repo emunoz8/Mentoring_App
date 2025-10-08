@@ -8,58 +8,102 @@
     <?!= include('Style'); ?>
   </head>
   <body>
-    <div class="panel" style="max-width:1200px;margin:0 auto;">
-      <h1>Sign-In Queue</h1>
-      <p class="desc">Drag students into the tray, then open Individual Notes prefilled with those IDs.</p>
-
-      <!-- Controls -->
-      <div class="controls">
-        <label for="dateInput">Date:
-          <input id="dateInput" type="date" />
-        </label>
-        <button id="openNotesBtn" class="btn btn-primary" type="button">Open Individual Notes</button>
-        <button id="claimTrayBtn" class="btn" type="button" title="Mark these as claimed">Claim Tray</button>
-        <span id="status" class="status"></span>
-      </div>
-
-      <!-- Three equal columns -->
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;align-items:start;">
-        <!-- LEFT: Board -->
-        <div>
-          <div id="board"></div>
-        </div>
-
-        <!-- MIDDLE: Tray -->
-        <div>
-          <div class="panel">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-              <strong>Tray</strong>
-              <div style="display:flex;gap:8px;">
-                <button id="clearTrayBtn" class="btn btn-ghost" type="button">Clear</button>
-              </div>
+    <div class="app-shell">
+      <section class="hero panel">
+        <div class="hero-content">
+          <div>
+            <h1>Sign-In Queue</h1>
+            <p class="desc">Track who has signed in, prep their notes, and keep your workflow flowing.</p>
+          </div>
+          <div class="hero-controls" role="group" aria-label="Queue actions">
+            <label class="hero-field" for="dateInput">
+              <span class="label">Review date</span>
+              <input id="dateInput" type="date" />
+            </label>
+            <div class="hero-buttons">
+              <button id="openNotesBtn" class="btn btn-primary" type="button">Open Individual Notes</button>
+              <button id="claimTrayBtn" class="btn" type="button" title="Mark these as claimed">Claim Tray</button>
             </div>
-            <div id="trayDrop"
-                class="cards"
-                style="min-height:72px;padding:10px;border:1px dashed var(--line);border-radius:12px;">
-              <div class="muted">Drag cards here (or click a card) to add to the tray.</div>
-            </div>
-            <div class="muted" id="trayCount" style="margin-top:8px;">0 selected</div>
           </div>
         </div>
-
-        <!-- RIGHT: Quick info (optional) -->
-        <div>
-          <div class="panel">
-            <h3 style="margin:0 0 8px;">Tips</h3>
-            <ul style="margin:0 0 8px 16px; padding:0; color:var(--muted);">
-              <li>Green = Pending, Amber = Claimed, Gray = Processed</li>
-              <li>Click a card or drag to add to the tray</li>
-              <li>“Open Individual Notes” opens the note page with these IDs</li>
-            </ul>
-          </div>
+        <div class="status-wrap">
+          <div id="status" class="status-pill" role="status" aria-live="polite" hidden></div>
         </div>
-      </div>
+      </section>
 
+      <section class="stats-grid" aria-label="Queue summary">
+        <article class="stat-card stat-total">
+          <h2>Total</h2>
+          <p id="statTotal" class="stat-value">0</p>
+          <span class="stat-footnote">Sign-ins for the selected date</span>
+        </article>
+        <article class="stat-card stat-pending">
+          <h2>Pending</h2>
+          <p id="statPending" class="stat-value">0</p>
+          <span class="stat-footnote">Awaiting claim</span>
+        </article>
+        <article class="stat-card stat-claimed">
+          <h2>Claimed</h2>
+          <p id="statClaimed" class="stat-value">0</p>
+          <span class="stat-footnote">Assigned and in progress</span>
+        </article>
+        <article class="stat-card stat-processed">
+          <h2>Processed</h2>
+          <p id="statProcessed" class="stat-value">0</p>
+          <span class="stat-footnote">Notes already completed</span>
+        </article>
+      </section>
+
+      <div class="layout-grid">
+        <section class="board-panel panel">
+          <header class="section-head">
+            <div class="section-title">
+              <h2>Sign-ins</h2>
+              <p>Grouped by school to surface where support is needed most.</p>
+            </div>
+          </header>
+          <div id="board" class="board"></div>
+        </section>
+
+        <aside class="tray-panel panel" aria-labelledby="trayHeading">
+          <header class="section-head">
+            <div class="section-title">
+              <h2 id="trayHeading">Tray</h2>
+              <p>Drop or tap to stage students for note taking.</p>
+            </div>
+            <button id="clearTrayBtn" class="btn btn-ghost" type="button">Clear Tray</button>
+          </header>
+          <div id="trayDrop" class="tray-drop" aria-live="polite">
+            <div class="muted empty-hint">Drag cards here (or tap a card) to add to the tray.</div>
+          </div>
+          <div class="tray-meta">
+            <span id="trayCount" class="tray-count muted">0 selected</span>
+          </div>
+        </aside>
+
+        <aside class="insights-panel panel" aria-labelledby="insightsHeading">
+          <header class="section-head">
+            <div class="section-title">
+              <h2 id="insightsHeading">Workflow tips</h2>
+              <p>Keep the queue moving smoothly.</p>
+            </div>
+          </header>
+          <ul class="tips-list">
+            <li>
+              <strong>Color cues</strong>
+              <span>Mint = pending, amber = claimed, slate = processed.</span>
+            </li>
+            <li>
+              <strong>Prep with the tray</strong>
+              <span>Stack multiple students, then open Individual Notes in a new tab.</span>
+            </li>
+            <li>
+              <strong>Fast follow-up</strong>
+              <span>Claim trays to show teammates the student is covered.</span>
+            </li>
+          </ul>
+        </aside>
+      </div>
     </div>
 
     <?!= include('QueueScript'); ?>

@@ -7,16 +7,24 @@
   // ---- Show any JS error in the UI
   window.addEventListener('error', (e) => {
     const msg = (e?.error?.message || e?.message || 'Unknown error');
-    setStatus('Error: ' + msg, false);
+    setStatus('Error: ' + msg, 'bad');
     console.error('Uncaught error:', e?.error || e);
   });
 
   // ---------- Utilities ----------
-  function setStatus(msg, neutral = true){
+  function setStatus(msg, tone = 'info'){
     const el = document.getElementById('status');
     if (!el) return;
-    el.textContent = msg || '';
-    el.style.color = neutral ? '#666' : '#b00020';
+    if (!msg){
+      el.textContent = '';
+      el.dataset.state = 'info';
+      el.setAttribute('hidden','');
+      return;
+    }
+    const kind = tone === 'bad' ? 'bad' : tone === 'ok' ? 'ok' : 'info';
+    el.textContent = msg;
+    el.dataset.state = kind;
+    el.removeAttribute('hidden');
   }
   function asBool(x) {
     if (x === true || x === false) return x;
@@ -42,9 +50,9 @@
   function getRosterByDateAsync(dateStr){
     return new Promise(resolve => {
       const r = runner();
-      if (!r) { setStatus('Apps Script not available.', false); return resolve({}); }
+      if (!r) { setStatus('Apps Script not available.', 'bad'); return resolve({}); }
       r.withSuccessHandler(res => resolve(res))
-       .withFailureHandler(err => { setStatus('Server error: ' + (err?.message || err), false); resolve({}); })
+       .withFailureHandler(err => { setStatus('Server error: ' + (err?.message || err), 'bad'); resolve({}); })
        .getRosterByDate(dateStr);
     });
   }
@@ -64,6 +72,38 @@
     if (asBool(p.pre) !== true && p.pre !== undefined)         missing.push('Manbox Pre-test');
     if (missing.length === 0) return { color: 'ok', label: 'All set', missing: [] };
     return { color: 'warn', label: 'Needs items', missing };
+  }
+
+  function renderSummary(roster){
+    const stats = { participants: 0, ready: 0, needs: 0, noDb: 0 };
+    const sets = Object.values(roster || {});
+    let activeGroups = 0;
+    sets.forEach(list => {
+      if (!Array.isArray(list)) return;
+      if (list.length) activeGroups += 1;
+      list.forEach(person => {
+        stats.participants += 1;
+        const status = computeStatus(person);
+        if (status.color === 'ok') stats.ready += 1;
+        else if (status.color === 'warn') stats.needs += 1;
+        else if (status.color === 'bad') stats.noDb += 1;
+      });
+    });
+    const assign = (id, value) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = Number(value || 0).toLocaleString();
+    };
+    assign('statParticipants', stats.participants);
+    assign('statReady', stats.ready);
+    assign('statNeeds', stats.needs);
+    assign('statNoDb', stats.noDb);
+
+    const foot = document.getElementById('statGroupsFootnote');
+    if (foot) {
+      foot.textContent = activeGroups
+        ? `Across ${activeGroups} group${activeGroups === 1 ? '' : 's'}`
+        : 'Across active groups';
+    }
   }
 
   // ---------- DnD ----------
@@ -96,15 +136,15 @@
         if (!res?.ok) {
           originalParent.appendChild(card);
           card.dataset.group = payload.fromGroup;
-          setStatus(res?.error || 'Move failed.', false);
+          setStatus(res?.error || 'Move failed.', 'bad');
         } else {
-          setStatus(`Moved ${card.dataset.name || payload.id} to ${toGroup}.`);
+          setStatus(`Moved ${card.dataset.name || payload.id} to ${toGroup}.`, 'ok');
         }
       })
      .withFailureHandler(err => {
         originalParent.appendChild(card);
         card.dataset.group = payload.fromGroup;
-        setStatus('Server error: ' + (err?.message || err), false);
+        setStatus('Server error: ' + (err?.message || err), 'bad');
       })
      .moveMember(payload.id, payload.fromGroup, toGroup, dateStr);
   }
@@ -207,8 +247,19 @@
     board.innerHTML = '';
 
     const groups = Object.keys(roster || {});
-    if (!groups.length) { setStatus('No groups with people for this date.'); return; }
+    if (!groups.length) {
+      board.classList.add('is-empty');
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.innerHTML = '<strong>No groups yet.</strong><br/>Try another date or confirm the roster has sign-ins.';
+      board.appendChild(empty);
+      setStatus('No groups with people for this date.', 'info');
+      renderSummary({});
+      return;
+    }
     setStatus('');
+    board.classList.remove('is-empty');
+    renderSummary(roster);
 
     const known = GROUP_ORDER.filter(g => groups.includes(g));
     const unexpected = groups.filter(g => !GROUP_ORDER.includes(g));
@@ -346,7 +397,7 @@
           .filter(p => p.id);
 
         if (!participants.length) {
-          setStatus(`No participants in ${groupName} to save.`, false);
+          setStatus(`No participants in ${groupName} to save.`, 'bad');
           return;
         }
 
@@ -358,7 +409,7 @@
 
         const r2 = runner();
         if (!r2) {
-          setStatus('Apps Script not available. Open via the deployed web app URL.', false);
+          setStatus('Apps Script not available. Open via the deployed web app URL.', 'bad');
           statusEl.textContent = 'Error';
           saveBtn.disabled = false;
           return;
@@ -367,18 +418,18 @@
         r2.withSuccessHandler(res => {
               if (!res?.ok) {
                 statusEl.textContent = 'Error';
-                setStatus(res?.error || 'Could not save note.', false);
+                setStatus(res?.error || 'Could not save note.', 'bad');
                 saveBtn.disabled = false;
                 return;
               }
               statusEl.textContent = 'Saved';
-              setStatus(`Saved ${groupName} — ${res.participantsAdded} participants, ${res.mentorsAdded} mentors.`, true);
+              setStatus(`Saved ${groupName} — ${res.participantsAdded} participants, ${res.mentorsAdded} mentors.`, 'ok');
               saveBtn.disabled = false;
             })
           .withFailureHandler(err => {
               statusEl.textContent = 'Error';
               saveBtn.disabled = false;
-              setStatus('Server error: ' + (err?.message || err), false);
+              setStatus('Server error: ' + (err?.message || err), 'bad');
             })
           .saveFullGroupNote(
             document.getElementById('datePicker').value,
@@ -434,15 +485,15 @@
       currentEditCard.dataset.id = newId;
 
       const r = runner();
-      if (!r) { setStatus('Apps Script not available.', false); idSpan.textContent = `(${oldId})`; currentEditCard.dataset.id = oldId; closeEditIdModal(); return; }
+      if (!r) { setStatus('Apps Script not available.', 'bad'); idSpan.textContent = `(${oldId})`; currentEditCard.dataset.id = oldId; closeEditIdModal(); return; }
 
       r.withSuccessHandler(res => {
           if (!res?.ok) {
             idSpan.textContent = `(${oldId})`;
             currentEditCard.dataset.id = oldId;
-            setStatus(res?.error || 'Update failed.', false);
+            setStatus(res?.error || 'Update failed.', 'bad');
           } else {
-            setStatus('ID updated.');
+            setStatus('ID updated.', 'ok');
             loadBoard();
           }
           closeEditIdModal();
@@ -450,7 +501,7 @@
        .withFailureHandler(err => {
           idSpan.textContent = `(${oldId})`;
           currentEditCard.dataset.id = oldId;
-          setStatus('Server error: ' + (err?.message || err), false);
+          setStatus('Server error: ' + (err?.message || err), 'bad');
           closeEditIdModal();
         })
        .updateMemberId(oldId, group, dateStr, newId);
@@ -463,14 +514,15 @@
     if (input && !input.value) input.value = new Date().toISOString().slice(0,10);
     const dateStr = input ? input.value : new Date().toISOString().slice(0,10);
 
-    setStatus('Loading…');
+    setStatus('Loading…', 'info');
+    renderSummary({});
     try {
       await ensureMentorsLoaded();                    // mentors first
       const roster = await getRosterByDateAsync(dateStr);
       renderBoard(roster);
     } catch (e) {
       console.error(e);
-      setStatus('Load error: ' + (e?.message || e), false);
+      setStatus('Load error: ' + (e?.message || e), 'bad');
     } finally {
       // Always clear "Loading…"
       if ((document.getElementById('status')?.textContent || '').includes('Loading')) {
@@ -489,7 +541,7 @@
     // First, verify Apps Script connectivity
     const r = runner();
     if (!r) {
-      setStatus('Apps Script not available. Open this page via the deployed web app.', false);
+      setStatus('Apps Script not available. Open this page via the deployed web app.', 'bad');
       return;
     }
     r.withSuccessHandler(() => {
@@ -497,14 +549,14 @@
         loadBoard();
       })
      .withFailureHandler(err => {
-        setStatus('Cannot reach server (ping failed): ' + (err?.message || err), false);
+        setStatus('Cannot reach server (ping failed): ' + (err?.message || err), 'bad');
       })
      .ping();
 
     // watchdog
     setTimeout(() => {
       if ((document.getElementById('status')?.textContent || '').includes('Loading')) {
-        setStatus('Still loading… check console and that UiScript is included.', false);
+        setStatus('Still loading… check console and that UiScript is included.', 'bad');
       }
     }, 12000);
   });
