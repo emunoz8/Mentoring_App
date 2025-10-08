@@ -46,47 +46,23 @@
     const status = String(row?.status || 'Pending');
     const hasNote = !!String(row?.contactId || '').trim();
     if (status === 'Processed' || hasNote) {
-      return { status: 'Processed', dot: 'neutral', title: 'Processed', bucket: 'processed' };
+      return { status: 'Processed', dot: 'neutral', title: 'Processed' };
     }
     if (status === 'Claimed') {
-      return { status: 'Claimed', dot: 'warn', title: 'Claimed', bucket: 'claimed' };
+      return { status: 'Claimed', dot: 'warn', title: 'Claimed' };
     }
-    return { status: 'Pending', dot: 'ok', title: 'Pending', bucket: 'pending' };
-  }
-
-  const summaryEls = {
-    total: () => $$('statTotal'),
-    pending: () => $$('statPending'),
-    claimed: () => $$('statClaimed'),
-    processed: () => $$('statProcessed')
-  };
-
-  function renderSummary(rows){
-    const counts = { total: 0, pending: 0, claimed: 0, processed: 0 };
-    if (Array.isArray(rows)) {
-      counts.total = rows.length;
-      rows.forEach(r => {
-        const bucket = statusInfo(r)?.bucket || 'pending';
-        if (counts[bucket] != null) counts[bucket] += 1;
-      });
-    }
-    Object.entries(counts).forEach(([key, value]) => {
-      const elGetter = summaryEls[key];
-      const el = typeof elGetter === 'function' ? elGetter() : null;
-      if (el) el.textContent = value.toLocaleString();
-    });
+    return { status: 'Pending', dot: 'ok', title: 'Pending' };
   }
 
   // ---------- Board (left column) ----------
   function renderBoard(rows){
     const board = $$('board');
     board.innerHTML = '';
-    board.classList.toggle('is-empty', !rows?.length);
 
     if (!rows?.length){
       const p = document.createElement('div');
-      p.className='empty-state';
-      p.innerHTML = '<strong>No sign-ins yet.</strong><br/>Try another date or confirm that the sign-in form has responses.';
+      p.className='muted';
+      p.textContent='No sign-ins for this date.';
       board.appendChild(p);
       return;
     }
@@ -113,10 +89,9 @@
       list.forEach(r=>{
         const meta = statusInfo(r);
         const c = document.createElement('div');
-        c.className = `card status-${meta.bucket}`;
+        c.className = `card status-${meta.status.toLowerCase()}`;
         c.draggable = true;
         c.dataset.id = r.id;
-        c.dataset.status = meta.bucket;
 
         c.innerHTML = `
           <div class="card-header">
