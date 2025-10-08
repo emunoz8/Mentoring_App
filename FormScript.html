@@ -308,7 +308,32 @@ function init(){
     const intake=$('intakeDate'); if(intake) intake.addEventListener(evt, ()=>{ updateAgeField(); updateStats(); });
   });
   wireSearch();
-  wireSuggest();
+  if (window.AppSuggest && typeof AppSuggest.wireRemoteSuggest === 'function') {
+    AppSuggest.wireRemoteSuggest({
+      input: 'personSearch',
+      list: 'suggestList',
+      minChars: 2,
+      limit: 10,
+      clearOnChoose: false,
+      placeholder: 'e.g., Jane, Doe, 123456',
+      run: () => (window.google && google.script && google.script.run) || null,
+      formatLabel: (it) => {
+        if (!it) return '';
+        if (it.label) return String(it.label);
+        const full = `${it.firstName || ''} ${it.lastName || ''}`.trim();
+        return full || String(it.id || '');
+      },
+      onChoose: (it) => {
+        $('personSearch').value = it.label || `${it.firstName || ''} ${it.lastName || ''}`.trim();
+        $('firstName').value = it.firstName || '';
+        $('lastName').value = it.lastName || '';
+        $('cpsIdNumber').value = it.id || '';
+        $('lookupId').value = it.id || '';
+        updateStats();
+        $('searchBtn').click();
+      },
+    });
+  }
   const intakeEl=$('intakeDate'); if(intakeEl && !intakeEl.value) intakeEl.value=todayYMD();
   const formBody=$('formContainer');
   if(formBody){

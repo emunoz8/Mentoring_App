@@ -249,65 +249,6 @@
     } catch(_){}
   }
 
-  // suggest (typeahead)
-  function wireStudentSuggest(){
-    const input=$$('studentInput'), list=$$('studentSuggest');
-    if(!input||!list) return;
-    let items=[], active=-1, pending=0;
-    const memoryCache = new Map(); // q -> results
-
-    const debounce=(fn,ms=220)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
-
-    function render(results){
-      items=results||[]; active=-1; list.innerHTML='';
-      if(!items.length){ list.style.display='none'; return; }
-      items.forEach((it,idx)=>{
-        const li=document.createElement('li'); li.className='suggest-item'; li.textContent=it.label;
-        li.addEventListener('mouseenter',()=>setActive(idx));
-        li.addEventListener('mouseleave',()=>setActive(-1));
-        li.addEventListener('click',()=>choose(idx));
-        list.appendChild(li);
-      }); list.style.display='block';
-    }
-    function setActive(idx){ Array.from(list.children).forEach((el,i)=>el.classList.toggle('active', i===idx)); active=idx; }
-    function choose(idx){
-      const it=items[idx]; if(!it) return;
-      input.value=''; list.style.display='none';
-      const full=`${it.firstName||''} ${it.lastName||''}`.trim();
-      addStudent(it.id||it.value||'', full||it.label);
-    }
-
-    const doSuggest=debounce(()=>{
-      const q=input.value.trim();
-      if(q.length<3){ render([]); return; }
-      if (memoryCache.has(q)) { render(memoryCache.get(q)); return; }
-
-      const callId=++pending;
-      run()?.withSuccessHandler(res=>{
-        if(callId!==pending) return;
-        memoryCache.set(q, res||[]);
-        render(res||[]);
-      })
-      .withFailureHandler(()=>render([]))
-      .suggestPeople(q,10);
-    },220);
-
-    input.placeholder = 'Type 3+ chars (name or ID)…';
-    input.addEventListener('input', doSuggest);
-    input.addEventListener('keydown',(e)=>{
-      if(list.style.display==='none') return;
-      if(e.key==='ArrowDown'){ e.preventDefault(); setActive(Math.min(items.length-1, active+1)); }
-      else if(e.key==='ArrowUp'){ e.preventDefault(); setActive(Math.max(0, active-1)); }
-      else if(e.key==='Enter'){ if(active>=0){ e.preventDefault(); choose(active);} }
-      else if(e.key==='Escape'){ list.style.display='none'; }
-    });
-    document.addEventListener('click',(e)=>{ if(!list.contains(e.target) && e.target!==input) list.style.display='none'; });
-    $$('addIdBtn')?.addEventListener('click', ()=>{
-      const id = ($$('manualId').value||'').trim(); if(!id) return;
-      addStudent(id, id); $$('manualId').value='';
-    });
-  }
-
   // ---------- Recent ----------
   function renderRecentGrouped(map){
     const box = $$('recent'); if (!box) return;
@@ -520,7 +461,30 @@
         }
       }
 
-      wireStudentSuggest();
+      if (window.AppSuggest && typeof AppSuggest.wireRemoteSuggest === 'function') {
+        AppSuggest.wireRemoteSuggest({
+          input: 'studentInput',
+          list: 'studentSuggest',
+          manualInput: 'manualId',
+          manualButton: 'addIdBtn',
+          minChars: 3,
+          limit: 10,
+          placeholder: 'Type 3+ characters (name or ID)…',
+          run,
+          onManualAdd: (id) => addStudent(id, id),
+          formatLabel: (it) => {
+            if (!it) return '';
+            const full = `${it.firstName || ''} ${it.lastName || ''}`.trim();
+            const ident = it.id || it.value || '';
+            if (full && ident) return `${full} · ${ident}`;
+            return full || String(it.label || ident || '');
+          },
+          onChoose: (it) => {
+            const full = `${it.firstName || ''} ${it.lastName || ''}`.trim();
+            addStudent(it.id || it.value || '', full || it.label);
+          },
+        });
+      }
       $$('saveBtn')?.addEventListener('click', onSave);
       $$('clearBtn')?.addEventListener('click', onClear);
       setStatus('');
