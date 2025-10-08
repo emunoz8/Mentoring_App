@@ -6,21 +6,6 @@
   const todayYMD = () => new Date().toISOString().slice(0,10);
   const esc = s => String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-function statusClass(r) {
-  const hasContact = r.contactId && String(r.contactId).trim().length > 0;
-  const isClaimed = String(r.status || '').toLowerCase() === 'claimed';
-
-  if (hasContact) return 'muted';  // gray
-  if (isClaimed) return 'warn';    // orange
-  return 'ok';                     // green (pending)
-}
-
-function statusTitle(r) {
-  if (r.contactId && String(r.contactId).trim().length > 0) return 'Has Individual Note';
-  if (String(r.status || '').toLowerCase() === 'claimed') return 'Claimed';
-  return 'Pending';
-}
-
 
 
   function setStatus(msg, state){
@@ -45,20 +30,14 @@ function statusTitle(r) {
   function buildIndividualNotesUrl(ids, opts={}){
     const params = new URLSearchParams();
     params.set('page','IndividualNotes');
-    if (ids?.length) params.set('ids', encodeURIComponent(ids.join(',')));
+    if (ids?.length) params.set('ids', ids.join(','));
     if (opts.date)   params.set('date', opts.date);
     return BASE_URL + '?' + params.toString();
   }
 
   // ---------- Board (left column) ----------
-  function statusDotClass(s){
-    return s === 'Processed' ? 'bad'   // gray-ish? (you can style differently)
-         : s === 'Claimed'   ? 'warn'
-         : 'ok';
-  }
-
   function renderBoard(rows){
-    // rows expected: [{ id, nfunction renderBoard(rows){
+    // rows expected: [{ id, name, status, mentor, mentorId, school, rowIndex }]
   const board = $$('board'); board.innerHTML = '';
   if (!rows?.length){
     const p = document.createElement('div');
