@@ -7,10 +7,18 @@
   const run = () => (window.google && google.script && google.script.run) || null;
   const todayYMD = () => new Date().toISOString().slice(0,10);
   const esc = s => String(s||'').replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;' }[c]));
-  function setStatus(msg, ok){
+  function setStatus(msg, tone = 'info'){
     const el=$$('status'); if(!el) return;
-    el.textContent = msg || '';
-    el.style.color = ok===true ? '#16a34a' : ok===false ? '#b00020' : 'var(--muted)';
+    if(!msg){
+      el.textContent = '';
+      el.dataset.state = 'info';
+      el.setAttribute('hidden','');
+      return;
+    }
+    const kind = tone === 'bad' ? 'bad' : tone === 'ok' ? 'ok' : 'info';
+    el.textContent = msg;
+    el.dataset.state = kind;
+    el.removeAttribute('hidden');
   }
 
   // ---------- Form factory ----------
@@ -166,6 +174,31 @@
   // ---------- Students widget ----------
   const selectedStudents = [];
 
+  function updateSelectionSummary(){
+    const count = selectedStudents.length;
+    const who = $$('whoLine');
+    if (who) {
+      who.textContent = count
+        ? `${count} student${count === 1 ? '' : 's'} selected`
+        : 'No students selected yet';
+    }
+    const metric = $$('selectedCount');
+    if (metric) metric.textContent = count.toLocaleString();
+    const stat = $$('statSelected');
+    if (stat) stat.textContent = count.toLocaleString();
+  }
+
+  function updateMentorSummary(){
+    const mentorId = ($$('mentorId')?.value || '').trim();
+    const stat = $$('statMentor');
+    if (stat) stat.textContent = mentorId ? '1' : '0';
+  }
+
+  function updateRecentSummary(value){
+    const stat = $$('statRecent');
+    if (stat) stat.textContent = Number(value || 0).toLocaleString();
+  }
+
   function renderStudentChips(){
     const wrap = $$('studentChips'); if (!wrap) return;
     wrap.innerHTML='';
@@ -173,9 +206,7 @@
       const chip = document.createElement('span');
       chip.className = 'chip';
       if (s.unmatched) {
-        chip.style.background = '#fff7ed';
-        chip.style.borderColor = '#fdba74';
-        chip.style.color = '#92400e';
+        chip.classList.add('chip-unmatched');
         chip.title = 'Not found in database (will be saved as Unmatched).';
       }
       chip.innerHTML = `${esc(s.name||s.id)} <span class="muted">(${esc(s.id)})</span><button title="Remove" aria-label="Remove">&times;</button>`;
@@ -186,7 +217,7 @@
       });
       wrap.appendChild(chip);
     });
-    const who = $$('whoLine'); if (who) who.textContent = selectedStudents.length ? `${selectedStudents.length} selected` : '';
+    updateSelectionSummary();
   }
 
   // add helpers
@@ -282,7 +313,17 @@
     const box = $$('recent'); if (!box) return;
     box.innerHTML='';
     const ids = Object.keys(map||{});
-    if(!ids.length){ box.innerHTML = '<div class="muted">No recent contacts.</div>'; return; }
+    if(!ids.length){
+      box.innerHTML = '<div class="muted">No recent contacts.</div>';
+      updateRecentSummary(0);
+      return;
+    }
+
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    const since = new Date(today);
+    since.setDate(since.getDate() - 6);
+    let weeklyCount = 0;
 
     ids.forEach(id=>{
       const arr = map[id] || [];
@@ -307,21 +348,33 @@
           ${n.notes?`<div>${esc(n.notes)}</div>`:''}
         `;
         box.appendChild(card);
+
+        if (n.dateYMD) {
+          const dt = new Date(n.dateYMD);
+          if (!Number.isNaN(dt.getTime()) && dt >= since) weeklyCount += 1;
+        }
       });
     });
+
+    updateRecentSummary(weeklyCount);
   }
   function refreshRecent(){
     const ids = selectedStudents.map(s=>s.id);
-    if(!ids.length){ const box=$$('recent'); if (box) box.innerHTML='<div class="muted">No recent contacts.</div>'; return; }
+    if(!ids.length){
+      const box=$$('recent');
+      if (box) box.innerHTML='<div class="muted">No recent contacts.</div>';
+      updateRecentSummary(0);
+      return;
+    }
     run()?.withSuccessHandler(map=>renderRecentGrouped(map||{}))
-         .withFailureHandler(()=>{})
+         .withFailureHandler(()=>{ updateRecentSummary(0); })
          .listRecentContactsForIds(ids,5);
   }
 
   // ---------- Save / Clear ----------
   let form;
   function onSave(){
-    if(!selectedStudents.length){ setStatus('Select at least one student.', false); return; }
+    if(!selectedStudents.length){ setStatus('Select at least one student.', 'bad'); return; }
     const v = form.values();
     const payload = {
       contactWith    : v.contactWith,
@@ -337,7 +390,7 @@
     const dateStr = v.date || todayYMD();
     const idsForQueue = selectedStudents.map(s => s.id);
 
-    setStatus('Saving…');
+    setStatus('Saving…', 'info');
     run()
       ?.withSuccessHandler(res=>{
         if(res?.ok){
@@ -346,13 +399,13 @@
             ?.withFailureHandler(()=>{}) // non-blocking; we already saved the note
              .markProcessedByIds(dateStr, idsForQueue, res.contactId, 'Processed');
 
-          setStatus(`Saved contact (${String(res.contactId||'').slice(0,8)}…) for ${res.participantsSaved} student(s) ✅`, true);
+          setStatus(`Saved contact (${String(res.contactId||'').slice(0,8)}…) for ${res.participantsSaved} student(s) ✅`, 'ok');
           refreshRecent();
         } else {
-          setStatus(res?.error||'Save failed.', false);
+          setStatus(res?.error||'Save failed.', 'bad');
         }
       })
-      .withFailureHandler(err=> setStatus(err?.message||'Save failed.', false))
+      .withFailureHandler(err=> setStatus(err?.message||'Save failed.', 'bad'))
       .saveIndividualContactSession(dateStr, selectedStudents, payload);
   }
   function onClear(){
@@ -369,7 +422,9 @@
     form.setValue('referrals','');
     const notesEl = $$('notes'); if (notesEl) notesEl.value = '';
     setStatus('');
+    updateMentorSummary();
     const box=$$('recent'); if (box) box.innerHTML = '<div class="muted">No recent contacts.</div>';
+    updateRecentSummary(0);
     $$('studentInput')?.focus();
   }
 
@@ -411,6 +466,9 @@
   window.addEventListener('DOMContentLoaded', async ()=>{
     try {
       form = createForm('indivForm', FIELDS, { cols: 3 });
+      updateSelectionSummary();
+      updateRecentSummary(0);
+      document.getElementById('mentorId')?.addEventListener('change', updateMentorSummary);
 
       // one-shot bootstrap: mentors + today
       const boot = await new Promise(resolve=>{
@@ -424,11 +482,13 @@
         .concat((boot.mentors||[]).map(m=>({ value:String(m.id||'').toUpperCase(), label: m.name || String(m.id||'') })));
       form.setOptions('mentorId', opts);
       if (boot.today) form.setValue('date', boot.today);
+      updateMentorSummary();
 
       // QS prefill (unchanged)
       const qs = await getQSAsync();
       if (qs.date) form.setValue('date', qs.date);
       if (qs.mentorId) form.setValue('mentorId', qs.mentorId);
+      updateMentorSummary();
 
       if (qs.ids && qs.ids.length) {
         const ids = qs.ids.map(x => String(x||'').trim()).filter(Boolean);
@@ -438,7 +498,7 @@
           renderStudentChips();
           refreshRecent();  // load recents right away
 
-          setStatus(`Loaded ${ids.length} ID${ids.length>1?'s':''} from link.`, true);
+          setStatus(`Loaded ${ids.length} ID${ids.length>1?'s':''} from link.`, 'ok');
           setTimeout(() => setStatus(''), 1200);
 
           // backfill names (non-blocking)
@@ -473,7 +533,7 @@
       }
 
     } catch (err) {
-      setStatus('Load error: ' + (err && err.message ? err.message : String(err)), false);
+      setStatus('Load error: ' + (err && err.message ? err.message : String(err)), 'bad');
     }
   });
 
