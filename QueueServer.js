@@ -168,12 +168,9 @@ function listQueue(dateStr) {
       else mentorId = mentorRaw.toUpperCase();
     }
 
-    // --- existing lines ---
-    // Normalize status
     const rawStatus = String(C.Status != null ? r[C.Status] : '').trim();
     const lowered = rawStatus.toLowerCase();
 
-    // NEW: read ProcessedAt + ContactID
     const processedAtVal = (C.ProcessedAt != null) ? r[C.ProcessedAt] : null;
     const hasProcessed   = !!processedAtVal;
     const contactIdCell  = (C.ContactID != null) ? String(r[C.ContactID] || '').trim() : '';
@@ -206,7 +203,7 @@ function listQueue(dateStr) {
       mentorName,
       status,
       claimedBy,
-      contactId: contactIdCell, // <-- add this line
+      contactId: contactIdCell,
       mine: (!!me && claimedBy && claimedBy.toLowerCase() === me.toLowerCase())
     });
 
@@ -257,6 +254,7 @@ function claimRows(rowIndices, claimedByRaw) {
     lock.waitLock(30000);
     rows.forEach(rn => {
       if (rn > sh.getLastRow()) { failed.push(rn); return; }
+      if (C.Status == null) { failed.push(rn); return; }
       // If already processed, don't overwrite
       const cur = String(sh.getRange(rn, C.Status + 1).getValue() || '').trim().toLowerCase();
       if (cur === 'processed' || cur === STATUS.PROCESSED.toLowerCase()) { failed.push(rn); return; }

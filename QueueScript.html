@@ -6,8 +6,6 @@
   const todayYMD = () => new Date().toISOString().slice(0,10);
   const esc = s => String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-
-
   function setStatus(msg, state){
     const el = $$('status'); if (!el) return;
     el.textContent = msg || '';
@@ -35,81 +33,85 @@
     return BASE_URL + '?' + params.toString();
   }
 
-  // ---------- Board (left column) ----------
-  function renderBoard(rows){
-    // rows expected: [{ id, name, status, mentor, mentorId, school, rowIndex }]
-  const board = $$('board'); board.innerHTML = '';
-  if (!rows?.length){
-    const p = document.createElement('div');
-    p.className='muted';
-    p.textContent='No sign-ins for this date.';
-    board.appendChild(p);
-    return;
+  function statusInfo(row){
+    const status = String(row?.status || 'Pending');
+    const hasNote = !!String(row?.contactId || '').trim();
+    if (status === 'Processed' || hasNote) {
+      return { status: 'Processed', dot: 'neutral', title: 'Processed' };
+    }
+    if (status === 'Claimed') {
+      return { status: 'Claimed', dot: 'warn', title: 'Claimed' };
+    }
+    return { status: 'Pending', dot: 'ok', title: 'Pending' };
   }
 
-  // group by school (or switch to mentor if you prefer)
-  const bySchool = new Map();
-  rows.forEach(r => {
-    const key = String(r.school||'').trim() || 'Other';
-    if (!bySchool.has(key)) bySchool.set(key, []);
-    bySchool.get(key).push(r);
-  });
+  // ---------- Board (left column) ----------
+  function renderBoard(rows){
+    const board = $$('board');
+    board.innerHTML = '';
 
-  Array.from(bySchool.entries()).forEach(([school, list])=>{
-    const col = document.createElement('div');
-    col.className = 'group';
-    const h = document.createElement('h3');
-    h.textContent = school;
-    col.appendChild(h);
+    if (!rows?.length){
+      const p = document.createElement('div');
+      p.className='muted';
+      p.textContent='No sign-ins for this date.';
+      board.appendChild(p);
+      return;
+    }
 
-    const cards = document.createElement('div');
-    cards.className = 'cards';
-    col.appendChild(cards);
-
-    list.forEach(r=>{
-      // map status -> class
-      const st = String(r.status || 'Pending');
-      const dotClass =
-        st === 'Processed' ? 'neutral' :
-        st === 'Claimed'   ? 'warn'    :
-                             'ok'; // Pending
-
-      const c = document.createElement('div');
-      c.className = `card status-${st.toLowerCase()}`;
-      c.draggable = true;
-      c.dataset.id = r.id;
-
-      c.innerHTML = `
-        <div class="card-header">
-          <span class="status-dot ${dotClass}" title="${esc(st)}"></span>
-          <div class="card-title">
-            <span class="name">${esc(r.name || r.displayName || r.id)}</span>
-            <span class="muted id-span">${esc(r.id)}</span>
-          </div>
-          <button class="menu-btn" title="Add to tray" aria-label="Add">+</button>
-        </div>
-        <div class="muted">Mentor: ${esc(r.mentor || r.mentorName || r.mentorId || '')}</div>
-      `;
-
-      // click to add to tray
-      c.querySelector('.menu-btn').addEventListener('click', () => addToTray(r));
-      c.addEventListener('click', (e) => {
-        // avoid double handling when + is clicked
-        if (e.target.closest('.menu-btn')) return;
-        addToTray(r);
-      });
-
-      // drag support
-      c.addEventListener('dragstart', (e)=>{
-        e.dataTransfer.setData('text/plain', JSON.stringify(r));
-      });
-
-      cards.appendChild(c);
+    const bySchool = new Map();
+    rows.forEach(r => {
+      const key = String(r.school||'').trim() || 'Other';
+      if (!bySchool.has(key)) bySchool.set(key, []);
+      bySchool.get(key).push(r);
     });
 
-    board.appendChild(col);
-  });
-}
+    Array.from(bySchool.entries()).forEach(([school, list])=>{
+      const col = document.createElement('div');
+      col.className = 'group';
+
+      const h = document.createElement('h3');
+      h.textContent = school;
+      col.appendChild(h);
+
+      const cards = document.createElement('div');
+      cards.className = 'cards';
+      col.appendChild(cards);
+
+      list.forEach(r=>{
+        const meta = statusInfo(r);
+        const c = document.createElement('div');
+        c.className = `card status-${meta.status.toLowerCase()}`;
+        c.draggable = true;
+        c.dataset.id = r.id;
+
+        c.innerHTML = `
+          <div class="card-header">
+            <span class="status-dot ${meta.dot}" title="${esc(meta.title)}"></span>
+            <div class="card-title">
+              <span class="name">${esc(r.name || r.displayName || r.id)}</span>
+              <span class="muted id-span">${esc(r.id)}</span>
+            </div>
+            <button class="menu-btn" title="Add to tray" aria-label="Add">+</button>
+          </div>
+          <div class="muted">Mentor: ${esc(r.mentor || r.mentorName || r.mentorId || '')}</div>
+        `;
+
+        c.querySelector('.menu-btn').addEventListener('click', () => addToTray(r));
+        c.addEventListener('click', (e) => {
+          if (e.target.closest('.menu-btn')) return;
+          addToTray(r);
+        });
+
+        c.addEventListener('dragstart', (e)=>{
+          e.dataTransfer.setData('text/plain', JSON.stringify(r));
+        });
+
+        cards.appendChild(c);
+      });
+
+      board.appendChild(col);
+    });
+  }
 
 
   // ---------- Tray (middle column) ----------
