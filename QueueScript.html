@@ -1,0 +1,265 @@
+<script>
+(() => {
+  // ---------- Small helpers ----------
+  const $$ = (id) => document.getElementById(id);
+  const run = () => window.google?.script?.run;
+  const todayYMD = () => new Date().toISOString().slice(0,10);
+  const esc = s => String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function statusClass(r) {
+  const hasContact = r.contactId && String(r.contactId).trim().length > 0;
+  const isClaimed = String(r.status || '').toLowerCase() === 'claimed';
+
+  if (hasContact) return 'muted';  // gray
+  if (isClaimed) return 'warn';    // orange
+  return 'ok';                     // green (pending)
+}
+
+function statusTitle(r) {
+  if (r.contactId && String(r.contactId).trim().length > 0) return 'Has Individual Note';
+  if (String(r.status || '').toLowerCase() === 'claimed') return 'Claimed';
+  return 'Pending';
+}
+
+
+
+  function setStatus(msg, state){
+    const el = $$('status'); if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = state==='bad' ? '#b00020' : state==='ok' ? '#16a34a' : 'var(--muted)';
+  }
+
+  // ---------- State ----------
+  let tray = [];     // [{id, name, school, mentor, rowIndex}]
+  let BASE_URL = ''; // cached web app base
+
+  // ---------- Base URL (for deep link) ----------
+  function ensureBaseUrl(cb){
+    if (BASE_URL) { cb(BASE_URL); return; }
+    run()
+      ?.withSuccessHandler(url => { BASE_URL = url || (location.origin + location.pathname); cb(BASE_URL); })
+      .withFailureHandler(() => { BASE_URL = location.origin + location.pathname; cb(BASE_URL); })
+      .getWebAppBaseUrl();
+  }
+
+  function buildIndividualNotesUrl(ids, opts={}){
+    const params = new URLSearchParams();
+    params.set('page','IndividualNotes');
+    if (ids?.length) params.set('ids', encodeURIComponent(ids.join(',')));
+    if (opts.date)   params.set('date', opts.date);
+    return BASE_URL + '?' + params.toString();
+  }
+
+  // ---------- Board (left column) ----------
+  function statusDotClass(s){
+    return s === 'Processed' ? 'bad'   // gray-ish? (you can style differently)
+         : s === 'Claimed'   ? 'warn'
+         : 'ok';
+  }
+
+  function renderBoard(rows){
+    // rows expected: [{ id, nfunction renderBoard(rows){
+  const board = $$('board'); board.innerHTML = '';
+  if (!rows?.length){
+    const p = document.createElement('div');
+    p.className='muted';
+    p.textContent='No sign-ins for this date.';
+    board.appendChild(p);
+    return;
+  }
+
+  // group by school (or switch to mentor if you prefer)
+  const bySchool = new Map();
+  rows.forEach(r => {
+    const key = String(r.school||'').trim() || 'Other';
+    if (!bySchool.has(key)) bySchool.set(key, []);
+    bySchool.get(key).push(r);
+  });
+
+  Array.from(bySchool.entries()).forEach(([school, list])=>{
+    const col = document.createElement('div');
+    col.className = 'group';
+    const h = document.createElement('h3');
+    h.textContent = school;
+    col.appendChild(h);
+
+    const cards = document.createElement('div');
+    cards.className = 'cards';
+    col.appendChild(cards);
+
+    list.forEach(r=>{
+      // map status -> class
+      const st = String(r.status || 'Pending');
+      const dotClass =
+        st === 'Processed' ? 'neutral' :
+        st === 'Claimed'   ? 'warn'    :
+                             'ok'; // Pending
+
+      const c = document.createElement('div');
+      c.className = `card status-${st.toLowerCase()}`;
+      c.draggable = true;
+      c.dataset.id = r.id;
+
+      c.innerHTML = `
+        <div class="card-header">
+          <span class="status-dot ${dotClass}" title="${esc(st)}"></span>
+          <div class="card-title">
+            <span class="name">${esc(r.name || r.displayName || r.id)}</span>
+            <span class="muted id-span">${esc(r.id)}</span>
+          </div>
+          <button class="menu-btn" title="Add to tray" aria-label="Add">+</button>
+        </div>
+        <div class="muted">Mentor: ${esc(r.mentor || r.mentorName || r.mentorId || '')}</div>
+      `;
+
+      // click to add to tray
+      c.querySelector('.menu-btn').addEventListener('click', () => addToTray(r));
+      c.addEventListener('click', (e) => {
+        // avoid double handling when + is clicked
+        if (e.target.closest('.menu-btn')) return;
+        addToTray(r);
+      });
+
+      // drag support
+      c.addEventListener('dragstart', (e)=>{
+        e.dataTransfer.setData('text/plain', JSON.stringify(r));
+      });
+
+      cards.appendChild(c);
+    });
+
+    board.appendChild(col);
+  });
+}
+
+
+  // ---------- Tray (middle column) ----------
+  function inTray(id){ return tray.some(t => String(t.id).toUpperCase() === String(id).toUpperCase()); }
+
+  function addToTray(item){
+    if (!item?.id) return;
+    if (inTray(item.id)) return;
+    tray.push({
+      id: String(item.id).trim(),
+      name: String(item.name||'').trim(),
+      school: item.school || '',
+      mentor: item.mentor || '',
+      rowIndex: item.rowIndex || null
+    });
+    renderTray();
+  }
+
+  function removeFromTray(id){
+    tray = tray.filter(t => String(t.id).toUpperCase() !== String(id).toUpperCase());
+    renderTray();
+  }
+
+  function clearTray(){
+    tray = [];
+    renderTray();
+  }
+
+  function renderTray(){
+    const box = $$('trayDrop');
+    box.innerHTML = '';
+    if (!tray.length){
+      box.innerHTML = '<div class="muted">Drag cards here (or click a card) to add to the tray.</div>';
+    } else {
+      tray.forEach(t=>{
+        const c = document.createElement('div');
+        c.className='card';
+        c.innerHTML = `
+          <div class="card-header">
+            <div class="card-title">
+              <span class="name">${esc(t.name || t.id)}</span>
+              <span class="muted id-span">${esc(t.id)}</span>
+            </div>
+            <button class="menu-btn" title="Remove" aria-label="Remove">&times;</button>
+          </div>
+          <div class="muted">School: ${esc(t.school||'')}</div>
+          <div class="muted">Mentor: ${esc(t.mentor||'')}</div>
+        `;
+        c.querySelector('button').addEventListener('click', ()=> removeFromTray(t.id));
+        box.appendChild(c);
+      });
+    }
+    $$('trayCount').textContent = `${tray.length} selected`;
+  }
+
+  // Drop target behavior
+  function wireTrayDnD(){
+    const drop = $$('trayDrop');
+    drop.addEventListener('dragover', (e)=>{ e.preventDefault(); drop.style.borderColor = '#cfe0ff'; });
+    drop.addEventListener('dragleave', ()=>{ drop.style.borderColor = 'var(--line)'; });
+    drop.addEventListener('drop', (e)=>{
+      e.preventDefault();
+      drop.style.borderColor = 'var(--line)';
+      try {
+        const r = JSON.parse(e.dataTransfer.getData('text/plain'));
+        addToTray(r);
+      } catch(_){}
+    });
+  }
+
+  // ---------- Open Individual Notes (deep link) ----------
+  function onOpenNotes(){
+    if (!tray.length){ alert('Add at least one student to the tray.'); return; }
+    const ids = tray.map(t => String(t.id).trim()).filter(Boolean);
+    const date = ($$('dateInput')?.value || '').trim();
+    ensureBaseUrl(base => {
+      const url = buildIndividualNotesUrl(ids, { date });
+      window.open(url, '_blank'); // keep the Queue open
+    });
+  }
+
+  // ---------- Claim tray (optional) ----------
+  function onClaimTray(){
+    const rows = tray.map(t => t.rowIndex).filter(n => Number(n) >= 2);
+    if (!rows.length) { alert('Tray is empty.'); return; }
+    setStatus('Claiming…');
+    run()
+      ?.withSuccessHandler(res=>{
+        if (res?.ok) {
+          setStatus('Claimed. Reloading…', 'ok');
+          loadForDate(($$('dateInput')?.value || todayYMD()));
+        } else {
+          setStatus(res?.error || 'Claim failed.', 'bad');
+        }
+      })
+      .withFailureHandler(err => setStatus(err?.message || 'Claim failed.', 'bad'))
+      .claimRows(rows);
+  }
+
+  // ---------- Data load ----------
+  function loadForDate(dYMD){
+    setStatus('Loading…');
+    run()
+      ?.withSuccessHandler(rows=>{
+        renderBoard(rows || []);
+        setStatus(`Loaded ${rows?.length||0} sign-in(s).`, 'ok');
+      })
+      .withFailureHandler(err=>{
+        renderBoard([]);
+        setStatus(err?.message || 'Failed to load sign-ins.', 'bad');
+      })
+      .getSignInsByDate(dYMD);
+  }
+
+  // ---------- Boot ----------
+  window.addEventListener('DOMContentLoaded', ()=>{
+    // date picker -> today
+    const di = $$('dateInput');
+    di.value = todayYMD();
+    di.addEventListener('change', ()=> loadForDate(di.value));
+
+    // tray buttons
+    $$('clearTrayBtn')?.addEventListener('click', clearTray);
+    $$('openNotesBtn')?.addEventListener('click', onOpenNotes);
+    $$('claimTrayBtn')?.addEventListener('click', onClaimTray);
+
+    wireTrayDnD();
+    renderTray();
+    loadForDate(di.value);
+  });
+})();
+</script>

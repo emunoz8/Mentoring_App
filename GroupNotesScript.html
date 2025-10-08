@@ -1,0 +1,511 @@
+<!-- GroupNotesScript.html -->
+
+<script>
+  const GROUP_ORDER = ['Bears','Bulls','Cubs','Fire','Soxs','Stars'];
+  let ALL_MENTORS = [];
+
+  // ---- Show any JS error in the UI
+  window.addEventListener('error', (e) => {
+    const msg = (e?.error?.message || e?.message || 'Unknown error');
+    setStatus('Error: ' + msg, false);
+    console.error('Uncaught error:', e?.error || e);
+  });
+
+  // ---------- Utilities ----------
+  function setStatus(msg, neutral = true){
+    const el = document.getElementById('status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = neutral ? '#666' : '#b00020';
+  }
+  function asBool(x) {
+    if (x === true || x === false) return x;
+    const s = (x == null ? '' : String(x)).trim().toLowerCase();
+    if (['true','t','yes','y','1','✓','done','complete','completed'].includes(s)) return true;
+    if (['false','f','no','n','0'].includes(s)) return false;
+    return null;
+  }
+
+  // stricter runner: returns null if google.script.run isn't injected
+  const runner = () => (window.google && google.script && google.script.run) ? google.script.run : null;
+
+  // ---------- Promise wrappers ----------
+  function loadMentorsAsync(activeOnly = true){
+    return new Promise(resolve => {
+      const r = runner();
+      if (!r) { ALL_MENTORS = []; return resolve(ALL_MENTORS); }
+      r.withSuccessHandler(list => { ALL_MENTORS = Array.isArray(list) ? list : []; resolve(ALL_MENTORS); })
+       .withFailureHandler(err => { console.warn('getMentors failed:', err); ALL_MENTORS = []; resolve(ALL_MENTORS); })
+       .getMentors(activeOnly);
+    });
+  }
+  function getRosterByDateAsync(dateStr){
+    return new Promise(resolve => {
+      const r = runner();
+      if (!r) { setStatus('Apps Script not available.', false); return resolve({}); }
+      r.withSuccessHandler(res => resolve(res))
+       .withFailureHandler(err => { setStatus('Server error: ' + (err?.message || err), false); resolve({}); })
+       .getRosterByDate(dateStr);
+    });
+  }
+  async function ensureMentorsLoaded(){
+    if (!Array.isArray(ALL_MENTORS) || ALL_MENTORS.length === 0){
+      await loadMentorsAsync(true);
+    }
+    return ALL_MENTORS;
+  }
+
+  // ---------- Status logic ----------
+  function computeStatus(p) {
+    const inDbOk = asBool(p.inDb) === true;
+    if (!inDbOk) return { color: 'bad', label: 'Not in DB', missing: ['Not in DB'] };
+    const missing = [];
+    if (asBool(p.consent) !== true && p.consent !== undefined) missing.push('Consent form');
+    if (asBool(p.pre) !== true && p.pre !== undefined)         missing.push('Manbox Pre-test');
+    if (missing.length === 0) return { color: 'ok', label: 'All set', missing: [] };
+    return { color: 'warn', label: 'Needs items', missing };
+  }
+
+  // ---------- DnD ----------
+  function onDragStart(e) {
+    const card = e.currentTarget;
+    e.dataTransfer.setData('text/plain', JSON.stringify({ id: card.dataset.id, fromGroup: card.dataset.group }));
+    e.dataTransfer.dropEffect = 'move';
+    card._dragging = true;
+  }
+  function onDragEnd(e) { e.currentTarget._dragging = false; }
+  function onDragOver(e) { e.preventDefault(); e.currentTarget.classList.add('dragover'); }
+  function onDragLeave(e) { e.currentTarget.classList.remove('dragover'); }
+  function onDropGroup(e) {
+    e.preventDefault(); e.currentTarget.classList.remove('dragover');
+    const col = e.currentTarget, toGroup = col.dataset.group;
+    let payload; try { payload = JSON.parse(e.dataTransfer.getData('text/plain')); } catch (_) {}
+    if (!payload?.id || !payload?.fromGroup || !toGroup || payload.fromGroup === toGroup) return;
+
+    const dateStr = document.getElementById('datePicker').value;
+    const card = document.querySelector(`.card[data-id="${payload.id}"][data-group="${payload.fromGroup}"]`);
+    if (!card) return;
+    const originalParent = card.parentElement;
+
+    // Optimistic UI
+    card.dataset.group = toGroup;
+    col.querySelector('.cards').appendChild(card);
+
+    const r = runner(); if (!r) return;
+    r.withSuccessHandler(res => {
+        if (!res?.ok) {
+          originalParent.appendChild(card);
+          card.dataset.group = payload.fromGroup;
+          setStatus(res?.error || 'Move failed.', false);
+        } else {
+          setStatus(`Moved ${card.dataset.name || payload.id} to ${toGroup}.`);
+        }
+      })
+     .withFailureHandler(err => {
+        originalParent.appendChild(card);
+        card.dataset.group = payload.fromGroup;
+        setStatus('Server error: ' + (err?.message || err), false);
+      })
+     .moveMember(payload.id, payload.fromGroup, toGroup, dateStr);
+  }
+
+  // ---------- Details modal ----------
+  function openDetailModal(person, status) {
+    const m = document.getElementById('detailModal');
+    const title = document.getElementById('modalTitle');
+    const body = document.getElementById('modalBody');
+    title.textContent = `${person.name} (${person.id})`;
+    if (status.color === 'bad') {
+      body.innerHTML = `<p><strong>Status:</strong> Not in DB</p><ul><li>Need to complete an intake form</li></ul>`;
+    } else if (status.missing.length) {
+      body.innerHTML = `<p><strong>Missing items:</strong></p><ul>${status.missing.map(x => `<li>${x}</li>`).join('')}</ul>`;
+    } else {
+      body.innerHTML = `<p>All required items are complete ✅</p>`;
+    }
+    m.style.display = 'flex';
+  }
+  (function wireDetailModal(){
+    const m = document.getElementById('detailModal');
+    if (!m) return;
+    document.getElementById('modalClose')?.addEventListener('click', () => m.style.display = 'none');
+    m.addEventListener('click', (e) => { if (e.target === m) m.style.display = 'none'; });
+  })();
+
+  // ---------- Mentors picker ----------
+  function wireMentorPicker(noteEl){
+    const chipsEl = noteEl.querySelector('.chips');
+    const input   = noteEl.querySelector('.mentor-input');
+    const sugg    = noteEl.querySelector('.suggestions');
+
+    const selected = noteEl._selectedMentors || (noteEl._selectedMentors = []);
+
+    function renderChips(){
+      chipsEl.innerHTML = '';
+      selected.forEach(m => {
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.innerHTML = `${m.name}<button title="Remove" aria-label="Remove mentor">&times;</button>`;
+        chip.querySelector('button').addEventListener('click', () => {
+          const idx = selected.findIndex(x => String(x.id||'').toUpperCase() === String(m.id||'').toUpperCase());
+          if (idx >= 0) selected.splice(idx,1);
+          renderChips();
+        });
+        chipsEl.appendChild(chip);
+      });
+    }
+    noteEl._renderChips = renderChips;
+
+    function closeSuggestions(){ sugg.classList.remove('open'); sugg.innerHTML=''; }
+    function openSuggestions(items){
+      sugg.classList.add('open'); sugg.innerHTML = '';
+      items.slice(0,8).forEach(m => {
+        const row = document.createElement('div');
+        row.className = 'suggestion';
+        row.textContent = m.name || m.id;
+        row.addEventListener('mousedown', (e)=>{
+          e.preventDefault();
+          const idU = String(m.id||'').toUpperCase();
+          if (!selected.some(x => String(x.id||'').toUpperCase() === idU)) {
+            selected.push({ id:idU, name: m.name || idU });
+            renderChips();
+          }
+          input.value = ''; closeSuggestions();
+        });
+        sugg.appendChild(row);
+      });
+      if (!items.length) {
+        const row = document.createElement('div');
+        row.className = 'suggestion';
+        row.style.color = '#98a2b3';
+        row.textContent = 'No matches';
+        sugg.appendChild(row);
+      }
+    }
+
+    input.addEventListener('input', () => {
+      const q = input.value.trim().toLowerCase();
+      if (!q) return closeSuggestions();
+      const matches = ALL_MENTORS
+        .filter(m => (m.name||'').toLowerCase().includes(q) || (m.id||'').toLowerCase().includes(q))
+        .filter(m => !selected.some(x => String(x.id||'').toUpperCase() === String(m.id||'').toUpperCase()));
+      openSuggestions(matches);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); const first = sugg.querySelector('.suggestion'); if (first) first.dispatchEvent(new Event('mousedown')); }
+      if (e.key === 'Backspace' && !input.value && selected.length) { selected.pop(); renderChips(); }
+      if (e.key === 'Escape') { closeSuggestions(); }
+    });
+    input.addEventListener('blur', () => setTimeout(closeSuggestions, 120));
+
+    renderChips();
+  }
+
+  // ---------- Render ----------
+  function renderBoard(roster){
+    const board = document.getElementById('board');
+    if (!board) return;
+    board.innerHTML = '';
+
+    const groups = Object.keys(roster || {});
+    if (!groups.length) { setStatus('No groups with people for this date.'); return; }
+    setStatus('');
+
+    const known = GROUP_ORDER.filter(g => groups.includes(g));
+    const unexpected = groups.filter(g => !GROUP_ORDER.includes(g));
+    const order = [...known, ...unexpected];
+
+    order.forEach(groupName => {
+      const col = document.createElement('div');
+      col.className = 'group';
+      col.dataset.group = groupName;
+      col.innerHTML = `<h3>${groupName}</h3><div class="cards"></div>`;
+
+      col.addEventListener('dragover', onDragOver);
+      col.addEventListener('dragleave', onDragLeave);
+      col.addEventListener('drop', onDropGroup);
+
+      const container = col.querySelector('.cards');
+
+      // Cards
+      (roster[groupName] || []).forEach(person => {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.draggable = true;
+        card.dataset.id = person.id;
+        card.dataset.group = groupName;
+        card.dataset.name = person.name;
+
+        const status = computeStatus(person);
+        const extra = [person.school, person.grade].filter(Boolean).join(' · ');
+
+        card.innerHTML = `
+          <div class="card-header">
+            <div class="card-title">
+              <span class="status-dot ${status.color}" title="${status.label}"></span>
+              <span class="name">${person.name}</span>
+              <span class="muted id-span">(${person.id})</span>
+            </div>
+            <button type="button" class="menu-btn" title="Edit ID" aria-label="Edit ID">
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="5" cy="12" r="2"></circle>
+                <circle cx="12" cy="12" r="2"></circle>
+                <circle cx="19" cy="12" r="2"></circle>
+              </svg>
+            </button>
+          </div>
+          ${extra ? `<div class="muted">${extra}</div>` : ''}
+        `;
+
+        card.addEventListener('dragstart', onDragStart);
+        card.addEventListener('dragend', onDragEnd);
+
+        card.addEventListener('click', (e) => {
+          if (card._dragging) return;
+          if (e.target.closest('.menu-btn')) return;
+          openDetailModal(person, status);
+        });
+
+        const menuBtn = card.querySelector('.menu-btn');
+        menuBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+        menuBtn.addEventListener('click', (e) => { e.stopPropagation(); openEditIdModal(card); });
+
+        container.appendChild(card);
+      });
+
+      // --- Note form ---
+      const note = document.createElement('div');
+      note.className = 'note-form';
+      note.innerHTML = `
+        <div class="note-mentors">
+          <div class="chips"></div>
+          <input type="text" class="mentor-input" placeholder="Add mentor…" autocomplete="off">
+          <div class="suggestions"></div>
+        </div>
+        <div class="note-row">
+          <input type="text" class="note-topic" placeholder="Topic">
+          <input type="number" class="note-duration" placeholder="Duration (min)" min="0">
+        </div>
+        <div>
+          <textarea class="note-summary" placeholder="Summary"></textarea>
+        </div>
+        <div class="note-actions">
+          <span class="note-status">Up to date</span>
+          <button type="button" class="note-save">Save Note</button>
+        </div>
+      `;
+      col.appendChild(note);
+
+      wireMentorPicker(note);
+
+      const dateStr = document.getElementById('datePicker').value;
+      const r = runner();
+      if (r) {
+        r.withSuccessHandler(res => {
+            if (res?.ok && res.note) {
+              note.querySelector('.note-topic').value = res.note.topic || '';
+              note.querySelector('.note-summary').value = res.note.summary || '';
+              note.querySelector('.note-duration').value = res.note.duration || '';
+              note.querySelector('.note-status').textContent = 'Up to date';
+            }
+          })
+         .withFailureHandler(err => {
+            console.warn('Prefill error:', err);
+          })
+         .getLatestGroupContactSession(dateStr, groupName);
+
+        r.withSuccessHandler(list => {
+            const selected = note._selectedMentors || (note._selectedMentors = []);
+            const have = new Set(selected.map(m => String(m.id||'').toUpperCase()));
+            (list || []).forEach(m => {
+              const idU = String(m.id || '').toUpperCase();
+              if (!idU || have.has(idU)) return;
+              const match = ALL_MENTORS.find(x => String(x.id||'').toUpperCase() === idU);
+              selected.push({ id: idU, name: match ? match.name : idU });
+              have.add(idU);
+            });
+            note._renderChips?.();
+          })
+         .withFailureHandler(err => {
+            console.warn('getGroupMentors error:', err);
+          })
+         .getGroupMentors(dateStr, groupName);
+      }
+
+      // ---------- Save handler (unified, no after-call chaining)
+      const saveBtn = note.querySelector('.note-save');
+      const statusEl = note.querySelector('.note-status');
+
+      saveBtn.addEventListener('click', () => {
+        const topic = note.querySelector('.note-topic').value.trim();
+        const summary = note.querySelector('.note-summary').value.trim();
+        const duration = Number(note.querySelector('.note-duration').value || 0);
+
+        // Gather participants from the visible cards in this column
+        const participants = Array.from(container.querySelectorAll('.card'))
+          .map(c => ({ id: c.dataset.id, name: c.dataset.name }))
+          .filter(p => p.id);
+
+        if (!participants.length) {
+          setStatus(`No participants in ${groupName} to save.`, false);
+          return;
+        }
+
+        // Mentors selected in the chips
+        const mentors = (note._selectedMentors || []).map(m => ({ id: m.id, name: m.name }));
+
+        statusEl.textContent = 'Saving…';
+        saveBtn.disabled = true;
+
+        const r2 = runner();
+        if (!r2) {
+          setStatus('Apps Script not available. Open via the deployed web app URL.', false);
+          statusEl.textContent = 'Error';
+          saveBtn.disabled = false;
+          return;
+        }
+
+        r2.withSuccessHandler(res => {
+              if (!res?.ok) {
+                statusEl.textContent = 'Error';
+                setStatus(res?.error || 'Could not save note.', false);
+                saveBtn.disabled = false;
+                return;
+              }
+              statusEl.textContent = 'Saved';
+              setStatus(`Saved ${groupName} — ${res.participantsAdded} participants, ${res.mentorsAdded} mentors.`, true);
+              saveBtn.disabled = false;
+            })
+          .withFailureHandler(err => {
+              statusEl.textContent = 'Error';
+              saveBtn.disabled = false;
+              setStatus('Server error: ' + (err?.message || err), false);
+            })
+          .saveFullGroupNote(
+            document.getElementById('datePicker').value,
+            groupName,
+            topic,
+            summary,
+            duration,
+            participants,
+            mentors
+          );
+      });
+
+      board.appendChild(col);
+    });
+  }
+
+  // ---------- Edit ID modal ----------
+  let currentEditCard = null;
+  function openEditIdModal(card) {
+    currentEditCard = card;
+    const input = document.getElementById('editIdInput');
+    input.value = card.dataset.id;
+    document.getElementById('editIdModal').style.display = 'flex';
+    setTimeout(() => input.select(), 0);
+  }
+  function closeEditIdModal() {
+    document.getElementById('editIdModal').style.display = 'none';
+    currentEditCard = null;
+  }
+  (function wireEditIdModal(){
+    const modal = document.getElementById('editIdModal');
+    if (!modal) return;
+    const input = document.getElementById('editIdInput');
+    const cancelBtn = document.getElementById('editIdCancel');
+    const saveBtn = document.getElementById('editIdSave');
+
+    cancelBtn?.addEventListener('click', closeEditIdModal);
+    modal.addEventListener('click', (e) => { if (e.target === modal) closeEditIdModal(); });
+    input?.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); closeEditIdModal(); }
+      if (e.key === 'Enter')  { e.preventDefault(); saveBtn.click(); }
+    });
+    saveBtn?.addEventListener('click', () => {
+      if (!currentEditCard) return;
+      const oldId = currentEditCard.dataset.id;
+      const group = currentEditCard.dataset.group;
+      const dateStr = document.getElementById('datePicker').value;
+      const newId = (document.getElementById('editIdInput').value || '').trim();
+      if (!newId || newId === oldId) { closeEditIdModal(); return; }
+
+      const idSpan = currentEditCard.querySelector('.id-span');
+      idSpan.textContent = `(${newId})`;
+      currentEditCard.dataset.id = newId;
+
+      const r = runner();
+      if (!r) { setStatus('Apps Script not available.', false); idSpan.textContent = `(${oldId})`; currentEditCard.dataset.id = oldId; closeEditIdModal(); return; }
+
+      r.withSuccessHandler(res => {
+          if (!res?.ok) {
+            idSpan.textContent = `(${oldId})`;
+            currentEditCard.dataset.id = oldId;
+            setStatus(res?.error || 'Update failed.', false);
+          } else {
+            setStatus('ID updated.');
+            loadBoard();
+          }
+          closeEditIdModal();
+        })
+       .withFailureHandler(err => {
+          idSpan.textContent = `(${oldId})`;
+          currentEditCard.dataset.id = oldId;
+          setStatus('Server error: ' + (err?.message || err), false);
+          closeEditIdModal();
+        })
+       .updateMemberId(oldId, group, dateStr, newId);
+    });
+  })();
+
+  // ---------- Single entry-point ----------
+  async function loadBoard(){
+    const input = document.getElementById('datePicker');
+    if (input && !input.value) input.value = new Date().toISOString().slice(0,10);
+    const dateStr = input ? input.value : new Date().toISOString().slice(0,10);
+
+    setStatus('Loading…');
+    try {
+      await ensureMentorsLoaded();                    // mentors first
+      const roster = await getRosterByDateAsync(dateStr);
+      renderBoard(roster);
+    } catch (e) {
+      console.error(e);
+      setStatus('Load error: ' + (e?.message || e), false);
+    } finally {
+      // Always clear "Loading…"
+      if ((document.getElementById('status')?.textContent || '').includes('Loading')) {
+        setStatus('');
+      }
+    }
+  }
+
+  // ---------- Boot (after DOM) ----------
+  window.addEventListener('DOMContentLoaded', () => {
+    const dateInput = document.getElementById('datePicker');
+    if (dateInput && !dateInput.value) dateInput.value = new Date().toISOString().slice(0,10);
+    document.getElementById('loadBtn')?.addEventListener('click', loadBoard);
+    dateInput?.addEventListener('change', loadBoard);
+
+    // First, verify Apps Script connectivity
+    const r = runner();
+    if (!r) {
+      setStatus('Apps Script not available. Open this page via the deployed web app.', false);
+      return;
+    }
+    r.withSuccessHandler(() => {
+        // good to go
+        loadBoard();
+      })
+     .withFailureHandler(err => {
+        setStatus('Cannot reach server (ping failed): ' + (err?.message || err), false);
+      })
+     .ping();
+
+    // watchdog
+    setTimeout(() => {
+      if ((document.getElementById('status')?.textContent || '').includes('Loading')) {
+        setStatus('Still loading… check console and that UiScript is included.', false);
+      }
+    }, 12000);
+  });
+</script>

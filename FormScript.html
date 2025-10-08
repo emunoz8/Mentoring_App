@@ -1,0 +1,229 @@
+<!-- formScript.html -->
+<script>
+/* ===== Dynamic form (matches your original) ===== */
+
+const FIELDS = [
+  { key:'emailAddress',        label:'Email Address' },
+  { key:'lastName',            label:'Last Name' },
+  { key:'firstName',           label:'First Name' },
+  { key:'intakeDate',          label:'Intake Date', type:'date', readonly:true },
+  { key:'participantStatus',   label:'Participant Status' },
+  { key:'joinedProgramYear',   label:"Joined What's Up in Program Year" },
+  { key:'birthDate',           label:'Birth Date', type:'date' },
+
+  { key:'gender', label:'Gender', type:'select',
+    options:['Male','Female','Nonbinary/Genderqueer','Transgender','Cisgender','Prefer not to say'] },
+
+  { key:'address',             label:'Address' },
+  { key:'zipCode',             label:'Zip Code' },
+  { key:'participantPhone',    label:'Participant Telephone Number' },
+  { key:'parentPhone',         label:'Parent Telephone Number' },
+  { key:'participantEmails',   label:'Participant Email(s)' },
+  { key:'race',                label:'Race' },
+  { key:'spanishOnly',         label:'Spanish-Language Only' },
+
+  { key:'ageAtIntake',         label:'Age at Intake [number]', type:'number', readonly:true },
+
+  { key:'gradeAtIntake',       label:'Grade at Intake' },
+  { key:'currentGradeLevel',   label:'Current Grade Level' },
+  { key:'school',              label:'School' },
+  { key:'cpsIdNumber',         label:'CPS ID Number' },
+
+  { key:'familyType', label:'Family Type', type:'select',
+    options:['Single Parent/Female','Single Parent/Male','Two-parent Household','Independent Youth','Relative','Guardian','Foster/DCFS'] },
+
+  { key:'householdSize',       label:'Household Size [number]', type:'number' },
+  { key:'siblingsCount',       label:'How Many Siblings? [number]', type:'number' },
+  { key:'grandparentsInHouse', label:'How Many Grandparents in House? [number]', type:'number' },
+
+  { key:'housingStatus', label:'Housing Status', type:'select',
+    options:['Rent','Own','Homeless/Shelter','In temporary Housing','Other'] },
+
+  { key:'incomeSource',  label:'Income Source', type:'select',
+    options:[
+      'Employment-One Parent/Guardian','Employment-Both Parents/Guardians','Employment-Participant',
+      'Pension','TANF','Social Security','Unemployment','Other(including SSDI, Child Support, VA benefits)','SSI'
+    ] },
+
+  { key:'yearlyIncome',        label:'Yearly Income [if known]' },
+
+  { key:'publicAssistance', label:'Public Assistance', type:'select',
+    options:['SNAP','TANF','Medicaid','SSI'] },
+
+  { key:'healthInsurance',     label:'Health Insurance' },
+
+  { key:'everWorked', label:'Have You Ever Worked? (Select all that apply)', type:'select',
+    options:['I have never worked','I have had summer jobs','I have worked part-time during the school year','I have worked full-time during the school year'] },
+
+  { key:'workingNow', label:'Are You Working Now?', type:'select',
+    options:['Working full-time','Working part-time','Not working, looking for work','Not working, not looking for work'] },
+
+  { key:'hasIEP',              label:'Do You Have an IEP?' },
+  { key:'has504',              label:'Any Medical Issues or 504 Plan?' },
+  { key:'medicalIssues',       label:'If Yes, What Are Your Medical Issues?', type:'textarea' },
+
+  { key:'relationshipStatus', label:'Relationship Status', type:'select',
+    options:['Currently dating','Not currently dating, not looking','Not dating, not looking','Other'] },
+
+  { key:'grades', label:'Are Your Grades:', type:'select',
+    options:["Mostly A's","Mostly B's","Mostly C's","Mostly Below C's"] },
+
+  { key:'attendance', label:'How Would You Describe, Your School Attendance?', type:'select',
+    options:['Almost Never Miss a Day','Occasionally Miss a Day','Frequently Miss Days'] },
+
+  { key:'punctuality', label:'How Would You Describe Getting to School on Time?', type:'select',
+    options:['Always on Time','Occasionally Late','Sometimes Late','Always Late'] },
+
+  { key:'involvementTeachers', label:'Involvement with Teachers (1-5) (1 being very comfortable)', type:'select',
+    options:['1','2','3','4','5'] },
+
+  { key:'involvementStaff', label:'Involvement with School Staff (1-5) (1 being very comfortable)', type:'select',
+    options:['1','2','3','4','5'] },
+
+  { key:'extracurricular',     label:'Extracurricular Activities' },
+  { key:'comments',            label:'Comments / Concerns', type:'textarea' },
+];
+
+/* ---- Utils ---- */
+const $ = (id)=>document.getElementById(id);
+
+function gsSerialToDate(n){ if(typeof n!=='number'||!isFinite(n)) return null; const ms=(n-25569)*86400*1000; const d=new Date(ms); return isNaN(d)?null:d;}
+function toDateInputValue(v){
+  if(v==null||v==='') return '';
+  let d; if(v instanceof Date) d=v; else if(typeof v==='number') d=gsSerialToDate(v); else d=new Date(v);
+  if(!d||isNaN(d)) return '';
+  const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), dd=String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${dd}`;
+}
+function todayYMD(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function calcAgeYMD(birthYMD, refYMD){
+  if(!birthYMD) return ''; const b=new Date(birthYMD+'T00:00:00'); if(isNaN(b)) return '';
+  const r=refYMD?new Date(refYMD+'T00:00:00'):new Date(); if(isNaN(r)) return '';
+  let age=r.getFullYear()-b.getFullYear(); const m=r.getMonth()-b.getMonth(); if(m<0||(m===0&&r.getDate()<b.getDate())) age--; return age;
+}
+function updateAgeField(){ const birth=$('birthDate')?.value||''; const intake=$('intakeDate')?.value||''; const age=calcAgeYMD(birth,intake); const el=$('ageAtIntake'); if(el) el.value=(age===''?'':String(age)); }
+function setStatus(msg, ok=false){ ['statusTop','statusBottom'].forEach(id=>{ const el=$(id); if(!el) return; el.textContent=msg||''; el.className='status '+(ok?'ok':(msg?'err':'')); }); }
+
+/* ---- Build form ---- */
+function buildForm(){
+  const container = $('formContainer');
+  container.innerHTML = '';
+  const grid = document.createElement('div');
+  grid.className = 'grid-3';
+  FIELDS.forEach(f=>{
+    const wrap=document.createElement('div');
+    const label=document.createElement('label'); label.setAttribute('for', f.key); label.textContent=f.label;
+    let input;
+    if(f.type==='textarea'){ input=document.createElement('textarea'); input.rows=3; wrap.style.gridColumn='1 / -1'; }
+    else if(f.type==='select'){ input=document.createElement('select'); (f.options||[]).forEach(opt=>{ const o=document.createElement('option'); o.value=opt; o.textContent=opt; input.appendChild(o); }); }
+    else { input=document.createElement('input'); input.type=f.type||'text'; if(f.readonly){ input.readOnly=true; input.style.background='#f9fafb'; } }
+    input.id=f.key; if(input.tagName!=='SELECT') input.placeholder=f.label;
+    wrap.appendChild(label); wrap.appendChild(input); grid.appendChild(wrap);
+  });
+  container.appendChild(grid);
+  const intakeEl=$('intakeDate'); if(intakeEl) intakeEl.value=todayYMD();
+}
+
+/* ---- Fill/Clear ---- */
+function fillForm(rec){
+  rec = rec || {};
+  FIELDS.forEach(f=>{
+    const el=$(f.key); if(!el) return;
+    if(f.key==='intakeDate'){ el.value=todayYMD(); return; }
+    let val = rec[f.key]!=null ? rec[f.key] : '';
+    if(f.type==='date'){ el.value = toDateInputValue(val); }
+    else if(f.type==='select'){
+      const exists = Array.from(el.options).some(o=>o.value===String(val));
+      if(val!=='' && !exists){ const opt=document.createElement('option'); opt.value=String(val); opt.textContent=String(val); el.insertBefore(opt, el.firstChild); }
+      el.value = String(val);
+    } else { el.value = String(val); }
+  });
+  updateAgeField();
+}
+function clearForm(){
+  $('lookupId').value=''; $('personSearch').value=''; $('suggestList').style.display='none';
+  FIELDS.forEach(f=>{ const el=$(f.key); if(el) el.value=''; });
+  const intakeEl=$('intakeDate'); if(intakeEl) intakeEl.value=todayYMD();
+  setStatus(''); $('personSearch').focus();
+}
+function syncLookupToField(){ const v=$('lookupId').value.trim(); const el=$('cpsIdNumber'); if(el) el.value=v; }
+
+/* ---- Search by ID ---- */
+let lastReqId = 0;
+function wireSearch(){
+  const btn=$('searchBtn'), input=$('lookupId'); if(!btn||!input) return;
+  btn.addEventListener('click',(e)=>{
+    e.preventDefault();
+    const id=input.value.trim(); if(!id){ setStatus('Enter a CPS ID Number.'); return; }
+    syncLookupToField(); setStatus('Looking up CPS ID Number…');
+    const reqId=++lastReqId;
+    google.script.run
+      .withSuccessHandler(res=>{
+        if(reqId!==lastReqId) return;
+        if(res && res.ok){ fillForm(res.record); $('intakeDate').value=todayYMD(); updateAgeField(); setStatus('Record found and auto-filled.', true); }
+        else { fillForm({}); $('cpsIdNumber').value=id; setStatus(res?.error || 'Not found.'); }
+      })
+      .withFailureHandler(err=>{ if(reqId!==lastReqId) return; setStatus(err?.message || 'Lookup failed.'); console.error('lookupById failed:', err); })
+      .lookupById(id);
+  });
+  input.addEventListener('keydown',(e)=>{ if(e.key==='Enter'){ e.preventDefault(); $('searchBtn').click(); }});
+}
+
+/* ---- Typeahead ---- */
+function wireSuggest(){
+  const input=$('personSearch'), list=$('suggestList');
+  let items=[], active=-1, pending=0;
+  const debounce=(fn,ms=180)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+  function render(results){ items=results||[]; active=-1; list.innerHTML=''; if(!items.length){ list.style.display='none'; return; }
+    items.forEach((it,idx)=>{ const li=document.createElement('li'); li.className='suggest-item'; li.textContent=it.label;
+      li.dataset.idx=idx; li.addEventListener('mouseenter',()=>setActive(idx)); li.addEventListener('mouseleave',()=>setActive(-1)); li.addEventListener('click',()=>choose(idx)); list.appendChild(li); });
+    list.style.display='block';
+  }
+  function setActive(idx){ Array.from(list.children).forEach((el,i)=>el.classList.toggle('active', i===idx)); active=idx; }
+  function choose(idx){
+    const it=items[idx]; if(!it) return;
+    $('personSearch').value=it.label;
+    $('firstName').value=it.firstName||''; $('lastName').value=it.lastName||''; $('cpsIdNumber').value=it.id||''; $('lookupId').value=it.id||'';
+    list.style.display='none'; $('searchBtn').click();
+  }
+  const doSuggest=debounce(()=>{ const q=input.value.trim(); if(q.length<2){ render([]); return; }
+    const callId=++pending;
+    google.script.run.withSuccessHandler(res=>{ if(callId!==pending) return; render(res||[]); })
+      .withFailureHandler(()=>render([])).suggestPeople(q,10);
+  },180);
+  input.addEventListener('input',doSuggest);
+  input.addEventListener('focus',()=>{ if(items.length) list.style.display='block'; });
+  document.addEventListener('click',(e)=>{ if(!list.contains(e.target) && e.target!==input) list.style.display='none'; });
+  input.addEventListener('keydown',(e)=>{ if(list.style.display==='none'||!items.length) return;
+    if(e.key==='ArrowDown'){ e.preventDefault(); setActive(Math.min(items.length-1, active+1)); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); setActive(Math.max(0, active-1)); }
+    else if(e.key==='Enter'){ if(active>=0){ e.preventDefault(); choose(active);} }
+    else if(e.key==='Escape'){ list.style.display='none'; }
+  });
+}
+
+/* ---- Save ---- */
+$('saveBtn')?.addEventListener('click', ()=>{
+  const btn=$('saveBtn'); if(btn.disabled) return; btn.disabled=true;
+  $('intakeDate').value=todayYMD();
+  const payload={}; FIELDS.forEach(f=>{ payload[f.key]= (($(f.key)?.value)||'').trim(); });
+  if(!payload.cpsIdNumber){ setStatus('Please enter a CPS ID Number before saving.'); $('lookupId').focus(); btn.disabled=false; return; }
+  setStatus('Saving…');
+  google.script.run
+    .withSuccessHandler(res=>{ if(res && res.ok){ setStatus('Saved to 2026 ✅', true); clearForm(); $('personSearch').focus(); } else { setStatus(res?.error||'Save failed.'); } btn.disabled=false; })
+    .withFailureHandler(err=>{ setStatus(err?.message||'Save failed.'); btn.disabled=false; })
+    .submitForm(payload);
+});
+
+/* ---- Wire on load ---- */
+document.addEventListener('DOMContentLoaded', ()=>{
+  buildForm();
+  // age updates when birth/intake change
+  ['input','change'].forEach(evt=>{
+    $('birthDate') && $('birthDate').addEventListener(evt, updateAgeField);
+    $('intakeDate') && $('intakeDate').addEventListener(evt, updateAgeField);
+  });
+  wireSearch();
+  wireSuggest();
+  const intakeEl=$('intakeDate'); if(intakeEl && !intakeEl.value) intakeEl.value=todayYMD();
+});
+</script>

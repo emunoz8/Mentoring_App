@@ -1,0 +1,481 @@
+<script>
+/* IndividualNotesScript (self-contained) */
+
+(() => {
+  // ---------- Tiny DOM helpers ----------
+  const $$  = (id) => document.getElementById(id);
+  const run = () => (window.google && google.script && google.script.run) || null;
+  const todayYMD = () => new Date().toISOString().slice(0,10);
+  const esc = s => String(s||'').replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;' }[c]));
+  function setStatus(msg, ok){
+    const el=$$('status'); if(!el) return;
+    el.textContent = msg || '';
+    el.style.color = ok===true ? '#16a34a' : ok===false ? '#b00020' : 'var(--muted)';
+  }
+
+  // ---------- Form factory ----------
+  function createForm(containerId, fields, { cols = 3 } = {}) {
+    const root = document.getElementById(containerId);
+    if (!root) throw new Error('Form container not found: ' + containerId);
+
+    const grid = document.createElement('div');
+    grid.className = cols === 3 ? 'grid-3' : 'grid-3';
+    root.innerHTML = '';
+    root.appendChild(grid);
+
+    const setSelectOptions = (sel, options = []) => {
+      sel.innerHTML = '';
+      options.forEach(opt => {
+        const o = document.createElement('option');
+        if (typeof opt === 'string') { o.value = opt; o.textContent = opt; }
+        else { o.value = String(opt.value ?? opt.label ?? ''); o.textContent = String(opt.label ?? opt.value ?? ''); }
+        sel.appendChild(o);
+      });
+    };
+
+    const getValues = () => {
+      const vals = {};
+      fields.forEach(f => {
+        const el = document.getElementById(f.key);
+        if (!el) return;
+        if (f.type === 'number') vals[f.key] = (el.value === '' ? '' : Number(el.value || 0));
+        else vals[f.key] = el.value;
+      });
+      const notesEl = document.getElementById('notes');
+      vals.notes = notesEl ? (notesEl.value || '') : '';
+      return vals;
+    };
+
+    const applyVisibility = () => {
+      const vals = getValues();
+      fields.forEach(f => {
+        const wrap = grid.querySelector(`[data-wrap="${f.key}"]`);
+        if (!wrap) return;
+        let show = true;
+        if (typeof f.visibleIf === 'function') {
+          try { show = !!f.visibleIf(vals); } catch(_) { show = true; }
+        }
+        wrap.style.display = show ? '' : 'none';
+      });
+    };
+
+    // render
+    fields.forEach(f => {
+      const wrap = document.createElement('div');
+      wrap.dataset.wrap = f.key;
+      if (f.span === 'full') wrap.style.gridColumn = '1 / -1';
+
+      const label = document.createElement('label');
+      label.setAttribute('for', f.key);
+      label.textContent = f.label + (f.required ? ' *' : '');
+
+      let input;
+      if (f.type === 'textarea') {
+        input = document.createElement('textarea'); input.rows = f.rows || 3;
+      } else if (f.type === 'select') {
+        input = document.createElement('select'); setSelectOptions(input, f.options || []);
+      } else {
+        input = document.createElement('input'); input.type = f.type || 'text';
+      }
+      input.id = f.key;
+      if (f.placeholder) input.placeholder = f.placeholder;
+
+      // default value
+      if (f.default !== undefined) {
+        const v = (typeof f.default === 'function') ? f.default() : f.default;
+        input.value = (v == null ? '' : String(v));
+      }
+
+      wrap.appendChild(label);
+      wrap.appendChild(input);
+      grid.appendChild(wrap);
+
+      input.addEventListener('input', applyVisibility);
+      input.addEventListener('change', applyVisibility);
+    });
+
+    // initial visibility
+    applyVisibility();
+
+    return {
+      values: getValues,
+      setOptions(key, options) {
+        const el = document.getElementById(key);
+        if (el && el.tagName === 'SELECT') setSelectOptions(el, options);
+      },
+      setValue(key, value) {
+        const el = document.getElementById(key);
+        if (el) { el.value = (value == null ? '' : String(value)); applyVisibility(); }
+      }
+    };
+  }
+
+  // ---------- Field spec ----------
+  const FIELDS = [
+    { key:'date',          label:'Date of Contact', type:'date',   default: () => todayYMD(), required:true },
+    { key:'duration',      label:'Duration (minutes)', type:'number', placeholder:'15', required:true },
+
+    { key:'contactWith',   label:'Contact was with', type:'select', required:true,
+      options:[
+        {value:'Participant',label:'Participant'},
+        {value:'Parent',label:'Parent'},
+        {value:'Teacher',label:'Teacher'},
+        {value:'CPS Staff',label:'CPS Staff'},
+        {value:'Other',label:'Other'}
+      ],
+      default:'Participant'
+    },
+
+    { key:'typeOfContact', label:'Type of Contact', type:'select', required:true,
+      options:[
+        {value:'In person',label:'In person'},
+        {value:'Phone (verbal)',label:'Phone (verbal)'},
+        {value:'Phone (text)',label:'Phone (text)'},
+        {value:'Email',label:'Email'},
+        {value:'Virtual',label:'Virtual'},
+        {value:'Social media',label:'Social media'},
+        {value:'Other',label:'Other'}
+      ],
+      default:'In person'
+    },
+
+    { key:'success',       label:'Outcome', type:'select', required:true,
+      options:[{value:'Successful',label:'Successful'},{value:'Attempted',label:'Attempted'}],
+      default:'Successful'
+    },
+
+    { key:'topic',         label:'Topic', type:'select', required:true,
+      options:[
+        'Academic','School Attendance','Group Attendance','Social Emotional Learning',
+        'Career Planning','Conflict Resolution','Relationship','Other'
+      ],
+      default:'Academic'
+    },
+
+    { key:'location',      label:'Location', type:'select',
+      options:[{value:'School',label:'School'},{value:'Home',label:'Home'},{value:'Other',label:'Other'}],
+      default:'School',
+      visibleIf: (v) => v.typeOfContact === 'In person'
+    },
+
+    { key:'mentorId',      label:'Mentor', type:'select', options:[{value:'',label:'— Select mentor —'}] },
+
+    { key:'referrals',     label:'Referrals', type:'text', span:'full', placeholder:'e.g., School Counselor; Alivio; …' }
+  ];
+
+  // ---------- Students widget ----------
+  const selectedStudents = [];
+
+  function renderStudentChips(){
+    const wrap = $$('studentChips'); if (!wrap) return;
+    wrap.innerHTML='';
+    selectedStudents.forEach(s=>{
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      if (s.unmatched) {
+        chip.style.background = '#fff7ed';
+        chip.style.borderColor = '#fdba74';
+        chip.style.color = '#92400e';
+        chip.title = 'Not found in database (will be saved as Unmatched).';
+      }
+      chip.innerHTML = `${esc(s.name||s.id)} <span class="muted">(${esc(s.id)})</span><button title="Remove" aria-label="Remove">&times;</button>`;
+      chip.querySelector('button').addEventListener('click', ()=>{
+        const i = selectedStudents.findIndex(x=>String(x.id).toUpperCase()===String(s.id).toUpperCase());
+        if (i>=0) selectedStudents.splice(i,1);
+        renderStudentChips(); refreshRecent();
+      });
+      wrap.appendChild(chip);
+    });
+    const who = $$('whoLine'); if (who) who.textContent = selectedStudents.length ? `${selectedStudents.length} selected` : '';
+  }
+
+  // add helpers
+  function addStudentInternal(id, name, { silent = false } = {}) {
+    const clean = String(id||'').trim(); if(!clean) return;
+    if (selectedStudents.some(s=>String(s.id).toUpperCase()===clean.toUpperCase())) return;
+    const s = { id: clean, name: String(name||'').trim(), unmatched:false };
+    selectedStudents.push(s);
+    if (!silent) {
+      renderStudentChips();
+      refreshRecent();
+      checkAndFlag(s);
+    }
+  }
+  function addStudent(id, name){ addStudentInternal(id, name, { silent:false }); }
+  window.__indiv = window.__indiv || {};
+  window.__indiv.addStudent = addStudent;
+
+  // server checks to flag unmatched IDs
+  async function checkAndFlag(student){
+    try{
+      const res = await new Promise(resolve=>{
+        run()?.withSuccessHandler(resolve)
+             .withFailureHandler(()=>resolve({ok:false}))
+             .checkIdStatus(student.id);
+      });
+      student.unmatched = !(res && res.ok && res.exists);
+      renderStudentChips();
+    } catch(_){}
+  }
+
+  // suggest (typeahead)
+  function wireStudentSuggest(){
+    const input=$$('studentInput'), list=$$('studentSuggest');
+    if(!input||!list) return;
+    let items=[], active=-1, pending=0;
+    const memoryCache = new Map(); // q -> results
+
+    const debounce=(fn,ms=220)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+
+    function render(results){
+      items=results||[]; active=-1; list.innerHTML='';
+      if(!items.length){ list.style.display='none'; return; }
+      items.forEach((it,idx)=>{
+        const li=document.createElement('li'); li.className='suggest-item'; li.textContent=it.label;
+        li.addEventListener('mouseenter',()=>setActive(idx));
+        li.addEventListener('mouseleave',()=>setActive(-1));
+        li.addEventListener('click',()=>choose(idx));
+        list.appendChild(li);
+      }); list.style.display='block';
+    }
+    function setActive(idx){ Array.from(list.children).forEach((el,i)=>el.classList.toggle('active', i===idx)); active=idx; }
+    function choose(idx){
+      const it=items[idx]; if(!it) return;
+      input.value=''; list.style.display='none';
+      const full=`${it.firstName||''} ${it.lastName||''}`.trim();
+      addStudent(it.id||it.value||'', full||it.label);
+    }
+
+    const doSuggest=debounce(()=>{
+      const q=input.value.trim();
+      if(q.length<3){ render([]); return; }
+      if (memoryCache.has(q)) { render(memoryCache.get(q)); return; }
+
+      const callId=++pending;
+      run()?.withSuccessHandler(res=>{
+        if(callId!==pending) return;
+        memoryCache.set(q, res||[]);
+        render(res||[]);
+      })
+      .withFailureHandler(()=>render([]))
+      .suggestPeople(q,10);
+    },220);
+
+    input.placeholder = 'Type 3+ chars (name or ID)…';
+    input.addEventListener('input', doSuggest);
+    input.addEventListener('keydown',(e)=>{
+      if(list.style.display==='none') return;
+      if(e.key==='ArrowDown'){ e.preventDefault(); setActive(Math.min(items.length-1, active+1)); }
+      else if(e.key==='ArrowUp'){ e.preventDefault(); setActive(Math.max(0, active-1)); }
+      else if(e.key==='Enter'){ if(active>=0){ e.preventDefault(); choose(active);} }
+      else if(e.key==='Escape'){ list.style.display='none'; }
+    });
+    document.addEventListener('click',(e)=>{ if(!list.contains(e.target) && e.target!==input) list.style.display='none'; });
+    $$('addIdBtn')?.addEventListener('click', ()=>{
+      const id = ($$('manualId').value||'').trim(); if(!id) return;
+      addStudent(id, id); $$('manualId').value='';
+    });
+  }
+
+  // ---------- Recent ----------
+  function renderRecentGrouped(map){
+    const box = $$('recent'); if (!box) return;
+    box.innerHTML='';
+    const ids = Object.keys(map||{});
+    if(!ids.length){ box.innerHTML = '<div class="muted">No recent contacts.</div>'; return; }
+
+    ids.forEach(id=>{
+      const arr = map[id] || [];
+      const headerName = (arr[0] && arr[0].displayName) ? arr[0].displayName : '';
+      const header = document.createElement('div');
+      header.style.margin = '10px 0 6px';
+      header.innerHTML = headerName
+        ? `<strong>${esc(headerName)} <span class="muted">(${esc(id)})</span></strong>`
+        : `<strong>ID: ${esc(id)}</strong>`;
+      box.appendChild(header);
+
+      arr.forEach(n=>{
+        const mentorLine = (n.mentorName || n.mentorId) ? `<div class="muted">Mentor: ${esc(n.mentorName || n.mentorId)}</div>` : '';
+        const card=document.createElement('div'); card.className='card';
+        card.innerHTML=`
+          <div class="card-header"><div class="card-title">
+            <span class="name">${esc(n.topic||'(No topic)')}</span>
+            <span class="muted id-span">[${esc(n.dateYMD||'')}] · ${esc(n.duration||0)} min · ${esc(n.typeOfContact||'')} · ${esc(n.success||'')}</span>
+          </div></div>
+          ${n.location?`<div class="muted">Location: ${esc(n.location)}</div>`:''}
+          ${mentorLine}
+          ${n.notes?`<div>${esc(n.notes)}</div>`:''}
+        `;
+        box.appendChild(card);
+      });
+    });
+  }
+  function refreshRecent(){
+    const ids = selectedStudents.map(s=>s.id);
+    if(!ids.length){ const box=$$('recent'); if (box) box.innerHTML='<div class="muted">No recent contacts.</div>'; return; }
+    run()?.withSuccessHandler(map=>renderRecentGrouped(map||{}))
+         .withFailureHandler(()=>{})
+         .listRecentContactsForIds(ids,5);
+  }
+
+  // ---------- Save / Clear ----------
+  let form;
+  function onSave(){
+    if(!selectedStudents.length){ setStatus('Select at least one student.', false); return; }
+    const v = form.values();
+    const payload = {
+      contactWith    : v.contactWith,
+      typeOfContact  : v.typeOfContact,
+      topic          : v.topic,
+      success        : v.success,
+      notes          : (v.notes || '').trim(),
+      location       : (v.typeOfContact === 'In person') ? (v.location || 'School') : '',
+      durationMinutes: Number(v.duration || 0),
+      referrals      : (v.referrals || '').trim(),
+      mentorId       : (v.mentorId || '').trim()
+    };
+    const dateStr = v.date || todayYMD();
+    const idsForQueue = selectedStudents.map(s => s.id);
+
+    setStatus('Saving…');
+    run()
+      ?.withSuccessHandler(res=>{
+        if(res?.ok){
+          // Immediately mark in sign_in_log: Status + ProcessedAt + append ContactID
+          run()
+            ?.withFailureHandler(()=>{}) // non-blocking; we already saved the note
+             .markProcessedByIds(dateStr, idsForQueue, res.contactId, 'Processed');
+
+          setStatus(`Saved contact (${String(res.contactId||'').slice(0,8)}…) for ${res.participantsSaved} student(s) ✅`, true);
+          refreshRecent();
+        } else {
+          setStatus(res?.error||'Save failed.', false);
+        }
+      })
+      .withFailureHandler(err=> setStatus(err?.message||'Save failed.', false))
+      .saveIndividualContactSession(dateStr, selectedStudents, payload);
+  }
+  function onClear(){
+    selectedStudents.splice(0,selectedStudents.length); renderStudentChips();
+    $$('studentInput').value=''; $$('manualId').value='';
+    form.setValue('date', todayYMD());
+    form.setValue('duration','');
+    form.setValue('contactWith','Participant');
+    form.setValue('typeOfContact','In person');
+    form.setValue('success','Successful');
+    form.setValue('topic','Academic');
+    form.setValue('location','School');
+    form.setValue('mentorId','');
+    form.setValue('referrals','');
+    const notesEl = $$('notes'); if (notesEl) notesEl.value = '';
+    setStatus('');
+    const box=$$('recent'); if (box) box.innerHTML = '<div class="muted">No recent contacts.</div>';
+    $$('studentInput')?.focus();
+  }
+
+  // ---------- Query-string helpers (deep link support) ----------
+  // Read outer URL params in Apps Script (works even inside the iframe)
+  function getQSAsync(){
+    return new Promise((resolve) => {
+      const api = (window.google && google.script && google.script.url);
+      if (!api) {
+        // Fallback for local testing (not Apps Script)
+        const p = new URLSearchParams(window.location.search || '');
+        const raw = (p.get('ids') ?? p.get('id') ?? '').trim();
+        const ids = decodeURIComponent(raw).split(/[\s,;|]+/).map(s=>s.trim()).filter(Boolean);
+        return resolve({
+          ids,
+          mentorId: (p.get('mentorId') || p.get('mentor') || '').trim().toUpperCase(),
+          date: (p.get('date') || '').trim()
+        });
+      }
+
+      api.getLocation((loc) => {
+        // loc.parameter is an object: { page: "IndividualNotes", ids: "50282476", ... }
+        const param = loc && loc.parameter ? loc.parameter : {};
+
+        const raw = String(param.ids ?? param.id ?? '').trim();
+        const ids = decodeURIComponent(raw).split(/[\s,;|]+/)
+          .map(s => s.trim()).filter(Boolean);
+
+        resolve({
+          ids,
+          mentorId: String(param.mentorId ?? param.mentor ?? '').trim().toUpperCase(),
+          date: String(param.date ?? '').trim()
+        });
+      });
+    });
+  }
+
+  // ---------- Boot ----------
+  window.addEventListener('DOMContentLoaded', async ()=>{
+    try {
+      form = createForm('indivForm', FIELDS, { cols: 3 });
+
+      // one-shot bootstrap: mentors + today
+      const boot = await new Promise(resolve=>{
+        run()
+          ?.withSuccessHandler(resolve)
+          .withFailureHandler(()=>resolve({mentors:[], today:null}))
+          .bootstrapIndividualNotes();
+      });
+
+      const opts = [{ value:'', label:'— Select mentor —'}]
+        .concat((boot.mentors||[]).map(m=>({ value:String(m.id||'').toUpperCase(), label: m.name || String(m.id||'') })));
+      form.setOptions('mentorId', opts);
+      if (boot.today) form.setValue('date', boot.today);
+
+      // QS prefill (unchanged)
+      const qs = await getQSAsync();
+      if (qs.date) form.setValue('date', qs.date);
+      if (qs.mentorId) form.setValue('mentorId', qs.mentorId);
+
+      if (qs.ids && qs.ids.length) {
+        const ids = qs.ids.map(x => String(x||'').trim()).filter(Boolean);
+        if (ids.length) {
+          // show chips immediately
+          ids.forEach(id => addStudentInternal(id, id, { silent:true }));
+          renderStudentChips();
+          refreshRecent();  // load recents right away
+
+          setStatus(`Loaded ${ids.length} ID${ids.length>1?'s':''} from link.`, true);
+          setTimeout(() => setStatus(''), 1200);
+
+          // backfill names (non-blocking)
+          run()
+            ?.withSuccessHandler(list=>{
+              const nameById = new Map((list||[]).map(x => [String(x.id), String(x.name||'')]));
+              let changed = false;
+              selectedStudents.forEach(s => {
+                const nm = nameById.get(String(s.id));
+                if (nm && nm !== s.name) { s.name = nm; changed = true; }
+              });
+              if (changed) renderStudentChips();
+            })
+            .withFailureHandler(()=>{})
+            .getNamesForIds(ids);
+
+          // soft-warn checks
+          selectedStudents.forEach(s => checkAndFlag(s));
+        }
+      }
+
+      wireStudentSuggest();
+      $$('saveBtn')?.addEventListener('click', onSave);
+      $$('clearBtn')?.addEventListener('click', onClear);
+      setStatus('');
+
+      // lazy-load "recent" after first paint
+      if (typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => refreshRecent(), { timeout: 80 });
+      } else {
+        window.setTimeout(refreshRecent, 50);
+      }
+
+    } catch (err) {
+      setStatus('Load error: ' + (err && err.message ? err.message : String(err)), false);
+    }
+  });
+
+})();
+</script>

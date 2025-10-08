@@ -1,0 +1,56 @@
+<!-- IndividualNotes.html -->
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Individual Notes</title>
+    <?!= include('Style'); ?>
+  </head>
+  <body>
+    <div class="panel" style="max-width:980px;margin:0 auto;">
+      <h1>Individual Notes</h1>
+      <p class="desc">Create one contact session and attach one or more students. Fields are trimmed to the essentials.</p>
+
+      <!-- Students (multi) -->
+      <label>Students</label>
+      <div class="panel" style="padding:12px;">
+        <div id="studentChips" class="chips" style="margin-bottom:8px;"></div>
+        <div class="suggest-wrap">
+          <input id="studentInput" type="text" placeholder="Type name or ID to add…" autocomplete="off" />
+          <ul id="studentSuggest" class="suggest-menu"></ul>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+          <input id="manualId" type="text" placeholder="Add by ID (e.g., 123456789)" style="max-width:280px;" />
+          <button id="addIdBtn" type="button" class="btn btn-ghost">Add ID</button>
+          <span class="muted" id="whoLine"></span>
+        </div>
+      </div>
+
+      <!-- Form fields (FIELDS-driven) -->
+      <div id="indivForm" style="margin-top:16px;"></div>
+
+      <!-- Notes -->
+      <div style="margin-top:6px;">
+        <label for="notes">Notes</label>
+        <textarea id="notes" rows="4" placeholder="Concise narrative (use for special concerns too)…"></textarea>
+      </div>
+
+      <div class="note-actions" style="margin-top:10px;">
+        <span id="status" class="status"></span>
+        <div style="display:flex; gap:10px;">
+          <button id="saveBtn" type="button" class="btn btn-primary">Save</button>
+          <button id="clearBtn" type="button" class="btn btn-ghost">Clear</button>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+      <h3 style="margin:0 0 8px;">Recent (per student)</h3>
+      <div id="recent"></div>
+    </div>
+
+    <?!= include('IndividualNotesScript'); ?>
+  </body>
+</html>

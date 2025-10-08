@@ -1,0 +1,49 @@
+<!-- form.html -->
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Editor – Live ID Lookup</title>
+    <?!= include('Style'); ?>
+
+  </head>
+  <body>
+    <div class="card">
+      <h1>Editor – Live ID Lookup</h1>
+      <p class="desc">Type a <b>name or ID</b> to get suggestions from <em>2025</em>, or look up by ID to auto-fill and save to <em>2026</em>.</p>
+
+      <label for="personSearch">Search student (First, Last, or ID)</label>
+      <div class="inline suggest-wrap">
+        <input id="personSearch" type="text" placeholder="e.g., Jane, Doe, 123456" autocomplete="off" />
+        <ul id="suggestList" class="suggest-menu"></ul>
+      </div>
+      <p class="muted">Type at least 2 characters. Use ↑/↓ and Enter to select.</p>
+
+      <div class="hr" style="height:1px;background:var(--line);margin:20px 0;"></div>
+
+      <label for="lookupId">CPS ID Number (Lookup)</label>
+      <div class="inline">
+        <input id="lookupId" type="text" placeholder="e.g., 123456789" autocomplete="off" />
+        <button id="searchBtn" type="button" class="ghost">Search</button>
+      </div>
+
+      <div class="status" id="statusTop"></div>
+      <div class="hr" style="height:1px;background:var(--line);margin:20px 0;"></div>
+
+      <div id="formContainer"></div>
+
+      <div class="actions" style="margin-top:20px; display:flex; gap:12px; flex-wrap:wrap;">
+        <button class="primary" id="saveBtn" type="button">Save to 2026</button>
+        <button class="ghost" id="clearBtn" type="button" onclick="clearForm()">Clear</button>
+      </div>
+
+      <div class="status" id="statusBottom"></div>
+      <div class="muted">Timestamp is set automatically on save.</div>
+    </div>
+
+    <?!= include('FormScript'); ?>
+  </body>
+</html>

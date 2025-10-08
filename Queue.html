@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Sign-In Queue</title>
+    <?!= include('Style'); ?>
+  </head>
+  <body>
+    <div class="panel" style="max-width:1200px;margin:0 auto;">
+      <h1>Sign-In Queue</h1>
+      <p class="desc">Drag students into the tray, then open Individual Notes prefilled with those IDs.</p>
+
+      <!-- Controls -->
+      <div class="controls">
+        <label for="dateInput">Date:
+          <input id="dateInput" type="date" />
+        </label>
+        <button id="openNotesBtn" class="btn btn-primary" type="button">Open Individual Notes</button>
+        <button id="claimTrayBtn" class="btn" type="button" title="Mark these as claimed">Claim Tray</button>
+        <span id="status" class="status"></span>
+      </div>
+
+      <!-- Three equal columns -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;align-items:start;">
+        <!-- LEFT: Board -->
+        <div>
+          <div id="board"></div>
+        </div>
+
+        <!-- MIDDLE: Tray -->
+        <div>
+          <div class="panel">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <strong>Tray</strong>
+              <div style="display:flex;gap:8px;">
+                <button id="clearTrayBtn" class="btn btn-ghost" type="button">Clear</button>
+              </div>
+            </div>
+            <div id="trayDrop"
+                class="cards"
+                style="min-height:72px;padding:10px;border:1px dashed var(--line);border-radius:12px;">
+              <div class="muted">Drag cards here (or click a card) to add to the tray.</div>
+            </div>
+            <div class="muted" id="trayCount" style="margin-top:8px;">0 selected</div>
+          </div>
+        </div>
+
+        <!-- RIGHT: Quick info (optional) -->
+        <div>
+          <div class="panel">
+            <h3 style="margin:0 0 8px;">Tips</h3>
+            <ul style="margin:0 0 8px 16px; padding:0; color:var(--muted);">
+              <li>Green = Pending, Amber = Claimed, Gray = Processed</li>
+              <li>Click a card or drag to add to the tray</li>
+              <li>“Open Individual Notes” opens the note page with these IDs</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <?!= include('QueueScript'); ?>
+  </body>
+</html>

@@ -1,0 +1,48 @@
+<!-- GroupNotes.html -->
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <?!= include('Style'); ?>  <!-- injects CSS -->
+  </head>
+  <body>
+    <!-- Top toolbar -->
+    <div class="controls">
+      <label>Date: <input type="date" id="datePicker" /></label>
+      <button id="loadBtn" type="button">Load</button>
+      <span id="status" class="status"></span>
+    </div>
+
+    <!-- Groups board (uses your #board grid styles). data-groupnotes is harmless now,
+         but lets you scope CSS later if needed without changing HTML again. -->
+    <div id="board" data-groupnotes></div>
+
+    <!-- Details modal -->
+    <div id="detailModal" class="modal-backdrop" role="dialog" aria-modal="true">
+      <div class="modal">
+        <header id="modalTitle">Details</header>
+        <div class="body" id="modalBody"></div>
+        <footer>
+          <button type="button" id="modalClose">Close</button>
+        </footer>
+      </div>
+    </div>
+
+    <!-- Edit ID modal -->
+    <div id="editIdModal" class="modal-backdrop" role="dialog" aria-modal="true">
+      <div class="modal">
+        <header>Edit ID</header>
+        <div class="body">
+          <label for="editIdInput" class="muted">New ID</label>
+          <input type="text" id="editIdInput" autocomplete="off" />
+        </div>
+        <footer>
+          <button type="button" id="editIdCancel">Cancel</button>
+          <button type="button" id="editIdSave">Save</button>
+        </footer>
+      </div>
+    </div>
+
+    <?!= include('GroupNotesScript'); ?> <!-- injects client JS -->
+  </body>
+</html>
