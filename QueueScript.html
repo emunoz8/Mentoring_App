@@ -7,9 +7,18 @@
   const esc = s => String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
   function setStatus(msg, state){
-    const el = $$('status'); if (!el) return;
-    el.textContent = msg || '';
-    el.style.color = state==='bad' ? '#b00020' : state==='ok' ? '#16a34a' : 'var(--muted)';
+    const el = $$('status');
+    if (!el) return;
+    const tone = state === 'bad' ? 'bad' : state === 'ok' ? 'ok' : 'info';
+    if (!msg){
+      el.textContent = '';
+      el.dataset.state = 'info';
+      el.setAttribute('hidden','');
+      return;
+    }
+    el.textContent = msg;
+    el.dataset.state = tone;
+    el.removeAttribute('hidden');
   }
 
   // ---------- State ----------
@@ -144,7 +153,7 @@
     const box = $$('trayDrop');
     box.innerHTML = '';
     if (!tray.length){
-      box.innerHTML = '<div class="muted">Drag cards here (or click a card) to add to the tray.</div>';
+      box.innerHTML = '<div class="muted empty-hint">Drag cards here (or tap a card) to add to the tray.</div>';
     } else {
       tray.forEach(t=>{
         const c = document.createElement('div');
@@ -164,17 +173,26 @@
         box.appendChild(c);
       });
     }
-    $$('trayCount').textContent = `${tray.length} selected`;
+    const countLabel = tray.length === 1 ? '1 student staged' : `${tray.length} students staged`;
+    $$('trayCount').textContent = tray.length ? countLabel : 'Tray is empty';
+
+    const clearBtn = $$('clearTrayBtn');
+    if (clearBtn) clearBtn.disabled = tray.length === 0;
+    const openBtn = $$('openNotesBtn');
+    if (openBtn) openBtn.disabled = tray.length === 0;
+    const claimBtn = $$('claimTrayBtn');
+    if (claimBtn) claimBtn.disabled = tray.length === 0;
   }
 
   // Drop target behavior
   function wireTrayDnD(){
     const drop = $$('trayDrop');
-    drop.addEventListener('dragover', (e)=>{ e.preventDefault(); drop.style.borderColor = '#cfe0ff'; });
-    drop.addEventListener('dragleave', ()=>{ drop.style.borderColor = 'var(--line)'; });
+    drop.addEventListener('dragenter', (e)=>{ e.preventDefault(); drop.classList.add('is-active'); });
+    drop.addEventListener('dragover', (e)=>{ e.preventDefault(); drop.classList.add('is-active'); });
+    drop.addEventListener('dragleave', ()=>{ drop.classList.remove('is-active'); });
     drop.addEventListener('drop', (e)=>{
       e.preventDefault();
-      drop.style.borderColor = 'var(--line)';
+      drop.classList.remove('is-active');
       try {
         const r = JSON.parse(e.dataTransfer.getData('text/plain'));
         addToTray(r);
@@ -216,11 +234,14 @@
     setStatus('Loading…');
     run()
       ?.withSuccessHandler(rows=>{
-        renderBoard(rows || []);
+        const list = rows || [];
+        renderBoard(list);
+        renderSummary(list);
         setStatus(`Loaded ${rows?.length||0} sign-in(s).`, 'ok');
       })
       .withFailureHandler(err=>{
         renderBoard([]);
+        renderSummary([]);
         setStatus(err?.message || 'Failed to load sign-ins.', 'bad');
       })
       .getSignInsByDate(dYMD);
@@ -239,7 +260,9 @@
     $$('claimTrayBtn')?.addEventListener('click', onClaimTray);
 
     wireTrayDnD();
+    renderBoard([]);
     renderTray();
+    renderSummary([]);
     loadForDate(di.value);
   });
 })();
