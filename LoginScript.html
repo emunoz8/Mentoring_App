@@ -1,0 +1,395 @@
+<script>
+(() => {
+  if (window.__OFY_loginInitialized) return;
+  window.__OFY_loginInitialized = true;
+
+  const $ = (id) => document.getElementById(id);
+  const utils = window.ClientUtils || {};
+  const fallbackToday = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const todayYMD = typeof utils.todayYMD === 'function' ? utils.todayYMD : fallbackToday;
+  const getRunner = typeof utils.getRunner === 'function'
+    ? utils.getRunner
+    : () => (window.google && google.script && google.script.run) ? google.script.run : null;
+  const callServer = typeof utils.call === 'function'
+    ? (method, args = [], options) => utils.call(method, args, options)
+    : (method, args = []) => {
+        const runner = getRunner();
+        if (!runner || typeof runner[method] !== 'function') {
+          return Promise.reject(new Error('Apps Script runner unavailable'));
+        }
+        const argArray = Array.isArray(args) ? args : [args];
+        return new Promise((resolve, reject) => {
+          const proxy = runner
+            .withSuccessHandler(resolve)
+            .withFailureHandler(reject);
+          try { proxy[method].apply(proxy, argArray); }
+          catch (err) { reject(err); }
+        });
+      };
+  const setStatus = typeof utils.createStatusSetter === 'function'
+    ? utils.createStatusSetter('statusBanner', { hideWhenEmpty: true })
+    : (msg, tone) => {
+        const pill = $('statusBanner');
+        if (!pill) return;
+        if (!msg) {
+          pill.textContent = '';
+          pill.dataset.state = 'info';
+          pill.hidden = true;
+          pill.setAttribute('hidden', '');
+          return;
+        }
+        const kind = tone === 'bad' ? 'bad' : tone === 'ok' ? 'ok' : 'info';
+        pill.textContent = msg;
+        pill.dataset.state = kind;
+        pill.hidden = false;
+        pill.removeAttribute('hidden');
+      };
+
+  const state = {
+    session: null,
+    selectedStudent: null,
+    sessions: []
+  };
+
+  function syncDateInputs() {
+    const today = todayYMD();
+    const heroDate = $('sessionDateInput');
+    const formDate = $('sessionDateField');
+    if (heroDate && !heroDate.value) heroDate.value = today;
+    if (formDate && !formDate.value) formDate.value = heroDate ? heroDate.value : today;
+  }
+
+  function renderSessionSummary() {
+    const summary = $('sessionSummary');
+    const panel = $('signInPanel');
+    if (!panel) return;
+    if (!state.session) {
+      panel.hidden = true;
+      panel.setAttribute('hidden', '');
+      summary.textContent = '';
+      const knownBtn = $('signInKnownBtn');
+      if (knownBtn) knownBtn.textContent = 'Sign in';
+      const manualBtn = $('manualEntryForm')?.querySelector('button[type="submit"]');
+      if (manualBtn) manualBtn.textContent = 'Add & sign in';
+      return;
+    }
+    panel.hidden = false;
+    panel.removeAttribute('hidden');
+    const mode = state.session.type === 'group' ? 'Group session (attendance)' : 'Individual session';
+    summary.textContent = `${state.session.label} · ${state.session.date} • ${mode}`;
+    const knownBtn = $('signInKnownBtn');
+    if (knownBtn) knownBtn.textContent = state.session.type === 'group' ? 'Record attendance' : 'Sign in';
+    const manualBtn = $('manualEntryForm')?.querySelector('button[type="submit"]');
+    if (manualBtn) manualBtn.textContent = state.session.type === 'group'
+      ? 'Add & record attendance'
+      : 'Add & sign in';
+  }
+
+  function renderSelectedStudent() {
+    const card = $('selectedStudentCard');
+    const summary = $('selectedStudentSummary');
+    const meta = $('selectedStudentMeta');
+    const btn = $('signInKnownBtn');
+    if (!card || !summary || !meta || !btn) return;
+
+    const student = state.selectedStudent;
+    if (!student) {
+      summary.textContent = 'No student selected.';
+      card.classList.add('muted');
+      meta.classList.add('is-empty');
+      meta.querySelectorAll('.fact-value').forEach(el => { el.textContent = '—'; });
+      btn.disabled = true;
+      return;
+    }
+
+    const fullName = `${student.firstName || ''} ${student.lastName || ''}`.trim();
+    summary.textContent = fullName || student.id || 'Selected student';
+    card.classList.remove('muted');
+    meta.classList.remove('is-empty');
+    const values = meta.querySelectorAll('.fact-value');
+    if (values[0]) values[0].textContent = student.id || '—';
+    if (values[1]) values[1].textContent = student.school || '—';
+    if (values[2]) values[2].textContent = student.email || '—';
+    btn.disabled = false;
+  }
+
+  function clearSelectedStudent() {
+    state.selectedStudent = null;
+    const search = $('studentSearch');
+    if (search) search.value = '';
+    renderSelectedStudent();
+  }
+
+  function setSession(session) {
+    state.session = session || null;
+    if (!state.session) {
+      clearSelectedStudent();
+    }
+    renderSessionSummary();
+    updateSessionCards();
+  }
+
+  function updateSessionCards(sessions) {
+    const list = $('sessionList');
+    const empty = $('sessionEmpty');
+    if (!list || !empty) return;
+
+    const records = Array.isArray(sessions) ? sessions : state.sessions;
+    list.innerHTML = '';
+    const current = state.session ? state.session.id : null;
+    if (!records.length) {
+      empty.hidden = false;
+      empty.removeAttribute('hidden');
+      return;
+    }
+    empty.hidden = true;
+    empty.setAttribute('hidden', '');
+
+    records.forEach(sess => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'session-card';
+      if (sess.id === current) button.classList.add('is-selected');
+      const count = Number(sess.signInCount || 0);
+      const last = sess.lastSignInAt ? new Date(sess.lastSignInAt) : null;
+      const lastLabel = last && !Number.isNaN(last.getTime())
+        ? last.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : '—';
+      const kindLabel = sess.type === 'group' ? 'Group' : 'Individual';
+      button.innerHTML = `
+        <span class="session-name">${sess.label}</span>
+        <span class="session-date">${sess.date}</span>
+        <span class="session-meta">${count} signed in • Last ${lastLabel} • ${kindLabel}</span>
+      `;
+      button.addEventListener('click', () => {
+        setSession(sess);
+        const readyLabel = sess.type === 'group' ? 'group attendance' : 'individual sign-ins';
+        setStatus(`Ready for ${readyLabel} in ${sess.label}.`, 'info');
+      });
+      list.appendChild(button);
+    });
+  }
+
+  function refreshSessions({ keepSelection = true } = {}) {
+    const date = $('sessionDateInput')?.value || '';
+    callServer('listActiveSignInSessions', [date])
+      .then(res => {
+        state.sessions = Array.isArray(res?.sessions) ? res.sessions : [];
+        updateSessionCards();
+        if (!keepSelection) {
+          setSession(null);
+        } else if (state.session) {
+          const match = state.sessions.find(s => s.id === state.session.id);
+          if (!match) {
+            setSession(null);
+            setStatus('Session ended. Choose another from the list.', 'warn');
+          } else {
+            setSession(match);
+          }
+        }
+      })
+      .catch(err => {
+        setStatus(err && err.message ? err.message : 'Failed to load sessions.', 'bad');
+      });
+  }
+
+  function handleStartSession(e) {
+    e.preventDefault();
+    const label = $('sessionLabelInput')?.value.trim();
+    const date = $('sessionDateField')?.value || $('sessionDateInput')?.value;
+    const typeInput = document.querySelector('input[name="sessionType"]:checked');
+    const type = (typeInput && typeInput.value === 'group') ? 'group' : 'individual';
+    if (!label) {
+      setStatus('Provide a group label before starting the session.', 'bad');
+      $('sessionLabelInput')?.focus();
+      return;
+    }
+    const btn = e.submitter;
+    if (btn) btn.disabled = true;
+    setStatus(`Creating ${type === 'group' ? 'group' : 'individual'} session…`, 'info');
+    callServer('startSignInSession', [label, date, type])
+      .then(res => {
+        if (!res?.ok) {
+          setStatus(res?.error || 'Unable to start session.', 'bad');
+          return;
+        }
+        const sessionType = res?.session?.type === 'group' ? 'group' : 'individual';
+        setStatus(`Session "${res.session.label}" (${sessionType}) is live.`, 'ok');
+        $('sessionLabelInput').value = '';
+        refreshSessions();
+        setSession(res.session);
+      })
+      .catch(err => {
+        setStatus(err && err.message ? err.message : 'Unable to start session.', 'bad');
+      })
+      .finally(() => {
+        if (btn) btn.disabled = false;
+      });
+  }
+
+  function handleEndSession() {
+    if (!state.session) return;
+    const sessionId = state.session.id;
+    setStatus(`Ending session ${state.session.label}…`, 'info');
+    callServer('endSignInSession', [sessionId])
+      .then(res => {
+        if (!res?.ok) {
+          setStatus(res?.error || 'Could not end session.', 'bad');
+          return;
+        }
+        setStatus(`Session "${state.session.label}" ended.`, 'ok');
+        setSession(null);
+        refreshSessions({ keepSelection: false });
+      })
+      .catch(err => {
+        setStatus(err && err.message ? err.message : 'Could not end session.', 'bad');
+      });
+  }
+
+  function signInWithStudent(details) {
+    if (!state.session) {
+      setStatus('Select a session before signing in.', 'bad');
+      return;
+    }
+    const payload = {
+      sessionId: state.session.id,
+      student: details
+    };
+    const inGroupMode = state.session.type === 'group';
+    setStatus(inGroupMode ? 'Recording attendance…' : 'Signing in…', 'info');
+    return callServer('recordStudentSignIn', [payload])
+      .then(res => {
+        if (!res?.ok) {
+          setStatus(res?.error || 'Sign-in failed.', 'bad');
+          return false;
+        }
+        const displayName = details.firstName || details.lastName
+          ? `${details.firstName || ''} ${details.lastName || ''}`.trim()
+          : (details.studentId || details.id || 'student');
+        setStatus(`${inGroupMode ? 'Recorded attendance for' : 'Signed in'} ${displayName}.`, 'ok');
+        refreshSessions();
+        return true;
+      })
+      .catch(err => {
+        setStatus(err && err.message ? err.message : 'Sign-in failed.', 'bad');
+        return false;
+      });
+  }
+
+  function handleKnownSignIn() {
+    if (!state.selectedStudent) {
+      setStatus('Pick your name before signing in.', 'bad');
+      return;
+    }
+    const details = {
+      id: state.selectedStudent.id,
+      studentId: state.selectedStudent.id,
+      firstName: state.selectedStudent.firstName || '',
+      lastName: state.selectedStudent.lastName || '',
+      school: state.selectedStudent.school || '',
+      email: state.selectedStudent.email || '',
+      grade: state.selectedStudent.grade || ''
+    };
+    const btn = $('signInKnownBtn');
+    if (btn) btn.disabled = true;
+    signInWithStudent(details).then(ok => {
+      if (ok) {
+        clearSelectedStudent();
+        $('studentSearch')?.focus();
+      }
+      if (btn) btn.disabled = false;
+    });
+  }
+
+  function handleManualSubmit(e) {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const details = {
+      studentId: $('manualId')?.value.trim(),
+      firstName: $('manualFirst')?.value.trim(),
+      lastName: $('manualLast')?.value.trim(),
+      school: $('manualSchool')?.value.trim(),
+      email: $('manualEmail')?.value.trim(),
+      grade: $('manualGrade')?.value.trim()
+    };
+    if (!details.studentId || !details.firstName || !details.lastName || !details.school || !details.email) {
+      setStatus('Please complete all required fields.', 'bad');
+      return;
+    }
+
+    Array.from(form.elements).forEach(el => el.disabled = true);
+    signInWithStudent(details).then(ok => {
+      if (ok) {
+        form.reset();
+        $('manualId')?.focus();
+      }
+      Array.from(form.elements).forEach(el => el.disabled = false);
+    });
+  }
+
+  function wireSuggest() {
+    if (!window.AppSuggest || typeof AppSuggest.wireRemoteSuggest !== 'function') return;
+    AppSuggest.wireRemoteSuggest({
+      input: 'studentSearch',
+      list: 'studentSuggestList',
+      minChars: 2,
+      limit: 12,
+      rpc: 'signInSuggestPeople',
+      placeholder: 'Start typing your first or last name…',
+      onChoose(item) {
+        state.selectedStudent = {
+          id: String(item.id || item.value || '').trim(),
+          firstName: String(item.firstName || '').trim(),
+          lastName: String(item.lastName || '').trim(),
+          school: String(item.school || '').trim(),
+          email: String(item.email || '').trim(),
+          grade: String(item.grade || '').trim()
+        };
+        renderSelectedStudent();
+      },
+      clearOnChoose: true
+    });
+  }
+
+  function wireEvents() {
+    $('startSessionForm')?.addEventListener('submit', handleStartSession);
+    $('reloadSessionsBtn')?.addEventListener('click', () => refreshSessions());
+    $('sessionDateInput')?.addEventListener('change', () => {
+      const date = $('sessionDateInput').value;
+      const field = $('sessionDateField');
+      if (field) field.value = date;
+      refreshSessions({ keepSelection: false });
+    });
+    $('sessionDateField')?.addEventListener('change', () => {
+      const hero = $('sessionDateInput');
+      const field = $('sessionDateField');
+      if (hero && field && hero.value !== field.value) hero.value = field.value;
+    });
+    $('changeSessionBtn')?.addEventListener('click', () => {
+      setSession(null);
+      setStatus('Choose a session to continue.', 'info');
+    });
+    $('endSessionBtn')?.addEventListener('click', handleEndSession);
+    $('signInKnownBtn')?.addEventListener('click', handleKnownSignIn);
+    $('manualEntryForm')?.addEventListener('submit', handleManualSubmit);
+  }
+
+  function init() {
+    syncDateInputs();
+    wireEvents();
+    wireSuggest();
+    renderSelectedStudent();
+    refreshSessions();
+    $('studentSearch')?.focus();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>

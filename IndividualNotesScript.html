@@ -2,24 +2,73 @@
 /* IndividualNotesScript (self-contained) */
 
 (() => {
+  if (window.__OFY_individualNotesInitialized) return;
+  window.__OFY_individualNotesInitialized = true;
   // ---------- Tiny DOM helpers ----------
   const $$  = (id) => document.getElementById(id);
-  const run = () => (window.google && google.script && google.script.run) || null;
-  const todayYMD = () => new Date().toISOString().slice(0,10);
-  const esc = s => String(s||'').replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;' }[c]));
-  function setStatus(msg, tone = 'info'){
-    const el=$$('status'); if(!el) return;
-    if(!msg){
-      el.textContent = '';
-      el.dataset.state = 'info';
-      el.setAttribute('hidden','');
-      return;
-    }
-    const kind = tone === 'bad' ? 'bad' : tone === 'ok' ? 'ok' : 'info';
-    el.textContent = msg;
-    el.dataset.state = kind;
-    el.removeAttribute('hidden');
-  }
+  const utils = window.ClientUtils || {};
+  const fallbackYMD = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const todayYMD = typeof utils.todayYMD === 'function' ? (input) => utils.todayYMD(input) : fallbackYMD;
+  const esc = typeof utils.esc === 'function'
+    ? (value) => utils.esc(value)
+    : (s => String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
+  const fallbackRunner = () => (window.google && google.script && google.script.run) || null;
+  const getRunner = typeof utils.getRunner === 'function' ? utils.getRunner : fallbackRunner;
+  const run = () => getRunner();
+  const setStatus = utils.createStatusSetter
+    ? utils.createStatusSetter('status')
+    : ((msg, tone = 'info') => {
+        const el = $$('status'); if (!el) return;
+        if (!msg) {
+          el.textContent = '';
+          el.dataset.state = 'info';
+          el.setAttribute('hidden', '');
+          return;
+        }
+        const kind = tone === 'bad' ? 'bad' : tone === 'ok' ? 'ok' : 'info';
+        el.textContent = msg;
+        el.dataset.state = kind;
+        el.removeAttribute('hidden');
+      });
+  const callServer = typeof utils.call === 'function'
+    ? (method, args = [], options) => utils.call(method, args, options)
+    : (method, args = [], { onSuccess, onFailure } = {}) => {
+        const runner = run();
+        if (!runner || typeof runner[method] !== 'function') {
+          const err = new Error('Apps Script not available');
+          if (typeof onFailure === 'function') {
+            try { onFailure(err); } catch(_) {}
+          }
+          return Promise.reject(err);
+        }
+        const argArray = Array.isArray(args) ? args : [args];
+        return new Promise((resolve, reject) => {
+          const proxy = runner
+            .withSuccessHandler(res => {
+              if (typeof onSuccess === 'function') {
+                try { onSuccess(res); } catch(_) {}
+              }
+              resolve(res);
+            })
+            .withFailureHandler(err => {
+              if (typeof onFailure === 'function') {
+                try { onFailure(err); } catch(_) {}
+              }
+              reject(err);
+            });
+          try {
+            proxy[method](...argArray);
+          } catch (err) {
+            if (typeof onFailure === 'function') {
+              try { onFailure(err); } catch(_) {}
+            }
+            reject(err);
+          }
+        });
+      };
 
   // ---------- Form factory ----------
   function createForm(containerId, fields, { cols = 3 } = {}) {
@@ -30,6 +79,10 @@
     grid.className = cols === 3 ? 'grid-3' : 'grid-3';
     root.innerHTML = '';
     root.appendChild(grid);
+
+    const fieldInputs = new Map();
+    const fieldWraps = new Map();
+    const notesEl = document.getElementById('notes');
 
     const setSelectOptions = (sel, options = []) => {
       sel.innerHTML = '';
@@ -44,12 +97,11 @@
     const getValues = () => {
       const vals = {};
       fields.forEach(f => {
-        const el = document.getElementById(f.key);
+        const el = fieldInputs.get(f.key);
         if (!el) return;
         if (f.type === 'number') vals[f.key] = (el.value === '' ? '' : Number(el.value || 0));
         else vals[f.key] = el.value;
       });
-      const notesEl = document.getElementById('notes');
       vals.notes = notesEl ? (notesEl.value || '') : '';
       return vals;
     };
@@ -57,7 +109,7 @@
     const applyVisibility = () => {
       const vals = getValues();
       fields.forEach(f => {
-        const wrap = grid.querySelector(`[data-wrap="${f.key}"]`);
+        const wrap = fieldWraps.get(f.key);
         if (!wrap) return;
         let show = true;
         if (typeof f.visibleIf === 'function') {
@@ -97,6 +149,8 @@
       wrap.appendChild(label);
       wrap.appendChild(input);
       grid.appendChild(wrap);
+      fieldInputs.set(f.key, input);
+      fieldWraps.set(f.key, wrap);
 
       input.addEventListener('input', applyVisibility);
       input.addEventListener('change', applyVisibility);
@@ -108,12 +162,16 @@
     return {
       values: getValues,
       setOptions(key, options) {
-        const el = document.getElementById(key);
+        const el = fieldInputs.get(key);
         if (el && el.tagName === 'SELECT') setSelectOptions(el, options);
       },
       setValue(key, value) {
-        const el = document.getElementById(key);
-        if (el) { el.value = (value == null ? '' : String(value)); applyVisibility(); }
+        const el = fieldInputs.get(key);
+        if (el) {
+          const next = (value == null ? '' : String(value));
+          if (el.value !== next) el.value = next;
+          applyVisibility();
+        }
       }
     };
   }
@@ -121,7 +179,7 @@
   // ---------- Field spec ----------
   const FIELDS = [
     { key:'date',          label:'Date of Contact', type:'date',   default: () => todayYMD(), required:true },
-    { key:'duration',      label:'Duration (minutes)', type:'number', placeholder:'15', required:true },
+    { key:'duration',      label:'Duration (minutes)', type:'number', default: 10, required:true },
 
     { key:'contactWith',   label:'Contact was with', type:'select', required:true,
       options:[
@@ -173,6 +231,10 @@
 
   // ---------- Students widget ----------
   const selectedStudents = [];
+  const selectedLookup = new Map();
+  const chipRegistry = new Map();
+  const normalizeId = (id) => String(id || '').trim().toUpperCase();
+  const unmatchedTitle = 'Not found in database (will be saved as Unmatched).';
 
   function updateSelectionSummary(){
     const count = selectedStudents.length;
@@ -199,53 +261,137 @@
     if (stat) stat.textContent = Number(value || 0).toLocaleString();
   }
 
+  const scheduleRefreshRecent = (() => {
+    let timer = null;
+    const runLater = () => {
+      timer = null;
+      refreshRecent();
+    };
+    return () => {
+      if (timer != null) return;
+      timer = window.setTimeout(runLater, 80);
+    };
+  })();
+
+  function buildChipElement(student){
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    const label = document.createElement('span');
+    label.className = 'chip-label';
+    const idSpan = document.createElement('span');
+    idSpan.className = 'muted';
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.title = 'Remove';
+    removeBtn.setAttribute('aria-label', 'Remove');
+    removeBtn.textContent = '×';
+    removeBtn.addEventListener('click', () => removeStudent(normalizeId(student.id)));
+    chip.append(label, idSpan, removeBtn);
+    return chip;
+  }
+
+  function updateChipElement(chip, student){
+    if (!chip) return;
+    const label = chip.querySelector('.chip-label');
+    const idSpan = chip.querySelector('.muted');
+    if (label) label.textContent = student.name || student.id || '';
+    if (idSpan) idSpan.textContent = ` (${student.id || ''})`;
+    if (student.unmatched) {
+      chip.classList.add('chip-unmatched');
+      chip.title = unmatchedTitle;
+    } else {
+      chip.classList.remove('chip-unmatched');
+      if (chip.title === unmatchedTitle) chip.removeAttribute('title');
+    }
+  }
+
   function renderStudentChips(){
-    const wrap = $$('studentChips'); if (!wrap) return;
-    wrap.innerHTML='';
-    selectedStudents.forEach(s=>{
-      const chip = document.createElement('span');
-      chip.className = 'chip';
-      if (s.unmatched) {
-        chip.classList.add('chip-unmatched');
-        chip.title = 'Not found in database (will be saved as Unmatched).';
+    const wrap = document.getElementById('studentChips');
+    if (!wrap) return;
+
+    if (!selectedStudents.length) {
+      chipRegistry.forEach(chip => chip.remove());
+      chipRegistry.clear();
+      wrap.innerHTML = '';
+      const empty = document.createElement('div');
+      empty.className = 'muted';
+      empty.textContent = 'No students selected yet';
+      wrap.appendChild(empty);
+      updateSelectionSummary();
+      scheduleRefreshRecent();
+      return;
+    }
+
+    const desired = new Set();
+    const fragment = document.createDocumentFragment();
+    selectedStudents.forEach(student => {
+      const key = normalizeId(student.id);
+      desired.add(key);
+      let chip = chipRegistry.get(key);
+      if (!chip) {
+        chip = buildChipElement(student);
+        chip.dataset.key = key;
+        chipRegistry.set(key, chip);
       }
-      chip.innerHTML = `${esc(s.name||s.id)} <span class="muted">(${esc(s.id)})</span><button title="Remove" aria-label="Remove">&times;</button>`;
-      chip.querySelector('button').addEventListener('click', ()=>{
-        const i = selectedStudents.findIndex(x=>String(x.id).toUpperCase()===String(s.id).toUpperCase());
-        if (i>=0) selectedStudents.splice(i,1);
-        renderStudentChips(); refreshRecent();
-      });
-      wrap.appendChild(chip);
+      updateChipElement(chip, student);
+      fragment.appendChild(chip);
     });
+
+    wrap.innerHTML = '';
+    wrap.appendChild(fragment);
+
+    chipRegistry.forEach((chip, key) => {
+      if (!desired.has(key)) {
+        chip.remove();
+        chipRegistry.delete(key);
+      }
+    });
+
     updateSelectionSummary();
+    scheduleRefreshRecent();
   }
 
   // add helpers
   function addStudentInternal(id, name, { silent = false } = {}) {
     const clean = String(id||'').trim(); if(!clean) return;
-    if (selectedStudents.some(s=>String(s.id).toUpperCase()===clean.toUpperCase())) return;
+    const key = normalizeId(clean);
+    if (!key || selectedLookup.has(key)) return;
     const s = { id: clean, name: String(name||'').trim(), unmatched:false };
     selectedStudents.push(s);
-    if (!silent) {
-      renderStudentChips();
-      refreshRecent();
-      checkAndFlag(s);
-    }
+    selectedLookup.set(key, s);
+    if (!silent) renderStudentChips();
+    if (!silent) checkAndFlag(s);
   }
   function addStudent(id, name){ addStudentInternal(id, name, { silent:false }); }
   window.__indiv = window.__indiv || {};
   window.__indiv.addStudent = addStudent;
 
+  function removeStudent(key, { silent = false } = {}) {
+    if (!key) return;
+    const student = selectedLookup.get(key);
+    if (!student) return;
+    selectedLookup.delete(key);
+    chipRegistry.delete(key);
+    const idx = selectedStudents.indexOf(student);
+    if (idx >= 0) selectedStudents.splice(idx, 1);
+    if (!silent) renderStudentChips();
+  }
+
+  function updateChipAppearance(student){
+    if (!student) return;
+    const key = normalizeId(student.id);
+    if (!key || !selectedLookup.has(key)) return;
+    const chip = chipRegistry.get(key);
+    if (!chip) return;
+    updateChipElement(chip, student);
+  }
+
   // server checks to flag unmatched IDs
   async function checkAndFlag(student){
     try{
-      const res = await new Promise(resolve=>{
-        run()?.withSuccessHandler(resolve)
-             .withFailureHandler(()=>resolve({ok:false}))
-             .checkIdStatus(student.id);
-      });
+      const res = await callServer('checkIdStatus', [student.id]).catch(() => ({ ok: false }));
       student.unmatched = !(res && res.ok && res.exists);
-      renderStudentChips();
+      updateChipAppearance(student);
     } catch(_){}
   }
 
@@ -307,14 +453,14 @@
       updateRecentSummary(0);
       return;
     }
-    run()?.withSuccessHandler(map=>renderRecentGrouped(map||{}))
-         .withFailureHandler(()=>{ updateRecentSummary(0); })
-         .listRecentContactsForIds(ids,5);
+    callServer('listRecentContactsForIds', [ids, 5])
+      .then(map => renderRecentGrouped(map || {}))
+      .catch(() => { updateRecentSummary(0); });
   }
 
   // ---------- Save / Clear ----------
   let form;
-  function onSave(){
+  async function onSave(){
     if(!selectedStudents.length){ setStatus('Select at least one student.', 'bad'); return; }
     const v = form.values();
     const payload = {
@@ -332,25 +478,23 @@
     const idsForQueue = selectedStudents.map(s => s.id);
 
     setStatus('Saving…', 'info');
-    run()
-      ?.withSuccessHandler(res=>{
-        if(res?.ok){
-          // Immediately mark in sign_in_log: Status + ProcessedAt + append ContactID
-          run()
-            ?.withFailureHandler(()=>{}) // non-blocking; we already saved the note
-             .markProcessedByIds(dateStr, idsForQueue, res.contactId, 'Processed');
-
-          setStatus(`Saved contact (${String(res.contactId||'').slice(0,8)}…) for ${res.participantsSaved} student(s) ✅`, 'ok');
-          refreshRecent();
-        } else {
-          setStatus(res?.error||'Save failed.', 'bad');
-        }
-      })
-      .withFailureHandler(err=> setStatus(err?.message||'Save failed.', 'bad'))
-      .saveIndividualContactSession(dateStr, selectedStudents, payload);
+    try {
+      const res = await callServer('saveIndividualContactSession', [dateStr, selectedStudents, payload]);
+      if (res?.ok) {
+        callServer('markProcessedByIds', [dateStr, idsForQueue, res.contactId, 'Processed']).catch(()=>{});
+        setStatus(`Saved contact (${String(res.contactId||'').slice(0,8)}…) for ${res.participantsSaved} student(s) ✅`, 'ok');
+        refreshRecent();
+      } else {
+        setStatus(res?.error||'Save failed.', 'bad');
+      }
+    } catch (err) {
+      setStatus(err?.message||'Save failed.', 'bad');
+    }
   }
   function onClear(){
-    selectedStudents.splice(0,selectedStudents.length); renderStudentChips();
+    selectedStudents.splice(0,selectedStudents.length);
+    selectedLookup.clear();
+    renderStudentChips();
     $$('studentInput').value=''; $$('manualId').value='';
     form.setValue('date', todayYMD());
     form.setValue('duration','');
@@ -412,12 +556,8 @@
       document.getElementById('mentorId')?.addEventListener('change', updateMentorSummary);
 
       // one-shot bootstrap: mentors + today
-      const boot = await new Promise(resolve=>{
-        run()
-          ?.withSuccessHandler(resolve)
-          .withFailureHandler(()=>resolve({mentors:[], today:null}))
-          .bootstrapIndividualNotes();
-      });
+      const boot = await callServer('bootstrapIndividualNotes')
+        .catch(() => ({ mentors:[], today:null }));
 
       const opts = [{ value:'', label:'— Select mentor —'}]
         .concat((boot.mentors||[]).map(m=>({ value:String(m.id||'').toUpperCase(), label: m.name || String(m.id||'') })));
@@ -443,8 +583,8 @@
           setTimeout(() => setStatus(''), 1200);
 
           // backfill names (non-blocking)
-          run()
-            ?.withSuccessHandler(list=>{
+          callServer('getNamesForIds', [ids])
+            .then(list => {
               const nameById = new Map((list||[]).map(x => [String(x.id), String(x.name||'')]));
               let changed = false;
               selectedStudents.forEach(s => {
@@ -453,32 +593,21 @@
               });
               if (changed) renderStudentChips();
             })
-            .withFailureHandler(()=>{})
-            .getNamesForIds(ids);
+            .catch(()=>{});
 
           // soft-warn checks
           selectedStudents.forEach(s => checkAndFlag(s));
         }
       }
 
-      if (window.AppSuggest && typeof AppSuggest.wireRemoteSuggest === 'function') {
-        AppSuggest.wireRemoteSuggest({
+      if (window.AppSuggest && typeof AppSuggest.wireRosterSuggest === 'function') {
+        AppSuggest.wireRosterSuggest({
           input: 'studentInput',
           list: 'studentSuggest',
           manualInput: 'manualId',
           manualButton: 'addIdBtn',
-          minChars: 3,
-          limit: 10,
-          placeholder: 'Type 3+ characters (name or ID)…',
           run,
           onManualAdd: (id) => addStudent(id, id),
-          formatLabel: (it) => {
-            if (!it) return '';
-            const full = `${it.firstName || ''} ${it.lastName || ''}`.trim();
-            const ident = it.id || it.value || '';
-            if (full && ident) return `${full} · ${ident}`;
-            return full || String(it.label || ident || '');
-          },
           onChoose: (it) => {
             const full = `${it.firstName || ''} ${it.lastName || ''}`.trim();
             addStudent(it.id || it.value || '', full || it.label);

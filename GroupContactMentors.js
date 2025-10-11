@@ -33,10 +33,6 @@ function saveGroupMentors(contactId, mentors) {
   const { sh, C } = ensureGroupContactMentorsSheet_();
   const lastRow = sh.getLastRow();
   const lastCol = sh.getLastColumn();
-  const data = (lastRow >= 2) ? sh.getRange(2,1,lastRow-1,lastCol).getValues() : [];
-
-  // Keep all rows NOT matching this contactId
-  const keep = data.filter(r => String(r[C.ContactID] || '').trim() !== contactId);
 
   // Normalize & de-dupe by MentorID
   const now = new Date();
@@ -52,11 +48,20 @@ function saveGroupMentors(contactId, mentors) {
     })
     .filter(Boolean);
 
+  const data = (lastRow >= 2) ? sh.getRange(2,1,lastRow-1,lastCol).getValues() : [];
+  const keep = data.filter(r => String(r[C.ContactID] || '').trim() !== contactId);
   const finalRows = keep.concat(rows);
+  const changed = rows.length || keep.length !== data.length;
 
-  _clearDataRows_(sh);
-  if (finalRows.length) {
-    sh.getRange(2, 1, finalRows.length, lastCol).setValues(finalRows);
+  if (changed) {
+    _clearDataRows_(sh);
+    if (finalRows.length) {
+      sh.getRange(2, 1, finalRows.length, lastCol).setValues(finalRows);
+    }
+    if (typeof _scriptCacheRemove_ === 'function') {
+      _scriptCacheRemove_('RECENT_META_V2');
+      _scriptCacheRemove_('RECENT_DATA_V2');
+    }
   }
 
   return { ok:true, contactId, added: rows.length, totalForContact: rows.length };

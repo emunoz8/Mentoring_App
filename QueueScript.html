@@ -5,10 +5,15 @@
   const run = () => window.google?.script?.run;
   const todayYMD = () => new Date().toISOString().slice(0,10);
   const esc = s => String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  let statusClearTimer = null;
 
   function setStatus(msg, state){
     const el = $$('status');
     if (!el) return;
+    if (statusClearTimer) {
+      clearTimeout(statusClearTimer);
+      statusClearTimer = null;
+    }
     const tone = state === 'bad' ? 'bad' : state === 'ok' ? 'ok' : 'info';
     if (!msg){
       el.textContent = '';
@@ -19,6 +24,14 @@
     el.textContent = msg;
     el.dataset.state = tone;
     el.removeAttribute('hidden');
+  }
+  function clearStatusSoon(delay = 2600){
+    if (delay == null || delay <= 0) {
+      setStatus('');
+      return;
+    }
+    if (statusClearTimer) clearTimeout(statusClearTimer);
+    statusClearTimer = setTimeout(() => setStatus(''), delay);
   }
 
   // ---------- State ----------
@@ -139,6 +152,31 @@
     renderTray();
   }
 
+  // ---------- Stats summary ----------
+  function renderSummary(rows){
+    const list = Array.isArray(rows) ? rows : [];
+    let total = list.length;
+    let pending = 0;
+    let claimed = 0;
+    let processed = 0;
+
+    list.forEach(r => {
+      const meta = statusInfo(r);
+      if (meta.status === 'Processed') processed += 1;
+      else if (meta.status === 'Claimed') claimed += 1;
+      else pending += 1;
+    });
+
+    const assign = (id, value) => {
+      const el = $$(id);
+      if (el) el.textContent = Number(value || 0).toLocaleString();
+    };
+    assign('statTotal', total);
+    assign('statPending', pending);
+    assign('statClaimed', claimed);
+    assign('statProcessed', processed);
+  }
+
   function removeFromTray(id){
     tray = tray.filter(t => String(t.id).toUpperCase() !== String(id).toUpperCase());
     renderTray();
@@ -237,7 +275,14 @@
         const list = rows || [];
         renderBoard(list);
         renderSummary(list);
-        setStatus(`Loaded ${rows?.length||0} sign-in(s).`, 'ok');
+        const total = list.length;
+        if (total) {
+          const label = total === 1 ? 'Loaded 1 sign-in.' : `Loaded ${total} sign-ins.`;
+          setStatus(label, 'ok');
+
+        } else {
+          setStatus('');
+        }
       })
       .withFailureHandler(err=>{
         renderBoard([]);

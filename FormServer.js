@@ -3,6 +3,49 @@
 
 function _norm_(s){return String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();}
 
+function _hydrateRosterRecords_(pack){
+  if (!Array.isArray(pack)) return [];
+  return pack.map(item => {
+    const arr = Array.isArray(item) ? item : [];
+    const id = String(arr[0] || '').trim();
+    const firstName = String(arr[1] || '').trim();
+    const lastName  = String(arr[2] || '').trim();
+    const fullRaw   = String(arr[3] || '').trim();
+    const school    = String(arr[4] || '').trim();
+    const grade     = String(arr[5] || '').trim();
+    const tab       = String(arr[6] || '').trim();
+    const rowIndex  = arr[7] ?? null;
+
+    const full = fullRaw || `${firstName} ${lastName}`.trim();
+    const labelParts = [];
+    if (full) labelParts.push(full);
+    if (id) labelParts.push(id);
+    const metaParts = [school, grade].filter(Boolean);
+    const label = labelParts.length
+      ? `${labelParts.join(' · ')}${metaParts.length ? ' (' + metaParts.join(' • ') + ')' : ''}`
+      : id;
+
+    return {
+      id,
+      firstName,
+      lastName,
+      school,
+      grade,
+      tab,
+      rowIndex,
+      label,
+      _n: {
+        id: _norm_(id),
+        first: _norm_(firstName),
+        last: _norm_(lastName),
+        full: _norm_(full),
+        school: _norm_(school),
+        grade: _norm_(grade)
+      }
+    };
+  });
+}
+
 function _dataRows_(){
   const cache = CacheService.getScriptCache();
   const hit = cache.get('FORM_DATA_ROWS_V1');
@@ -16,43 +59,90 @@ function _dataRows_(){
 
 function _rowToRecord_(r){
   const C = CONFIG.FORM.COLS;
-  return {
-    timestamp:r[C.timestamp], emailAddress:r[C.emailAddress],
-    lastName:r[C.lastName], firstName:r[C.firstName],
-    intakeDate:r[C.intakeDate], participantStatus:r[C.participantStatus],
-    joinedProgramYear:r[C.joinedProgramYear], birthDate:r[C.birthDate],
-    gender:r[C.gender], address:r[C.address], zipCode:r[C.zipCode],
-    participantPhone:r[C.participantPhone], parentPhone:r[C.parentPhone],
-    participantEmails:r[C.participantEmails], race:r[C.race],
-    spanishOnly:r[C.spanishOnly], ageAtIntake:r[C.ageAtIntake],
-    gradeAtIntake:r[C.gradeAtIntake], currentGradeLevel:r[C.currentGradeLevel],
-    school:r[C.school], cpsIdNumber:r[C.cpsIdNumber], familyType:r[C.familyType],
-    householdSize:r[C.householdSize], siblingsCount:r[C.siblingsCount],
-    grandparentsInHouse:r[C.grandparentsInHouse], housingStatus:r[C.housingStatus],
-    incomeSource:r[C.incomeSource], yearlyIncome:r[C.yearlyIncome],
-    publicAssistance:r[C.publicAssistance], healthInsurance:r[C.healthInsurance],
-    everWorked:r[C.everWorked], workingNow:r[C.workingNow],
-    hasIEP:r[C.hasIEP], has504:r[C.has504], medicalIssues:r[C.medicalIssues],
-    relationshipStatus:r[C.relationshipStatus], grades:r[C.grades],
-    attendance:r[C.attendance], punctuality:r[C.punctuality],
-    involvementTeachers:r[C.involvementTeachers], involvementStaff:r[C.involvementStaff],
-    extracurricular:r[C.extracurricular], comments:r[C.comments],
-  };
+  const record = {};
+  Object.keys(C).forEach(key => {
+    record[key] = r[C[key]];
+  });
+  return record;
+}
+
+function _getSuggestRoster_(){
+  const cache = CacheService.getScriptCache();
+  const key = 'FORM_SUGGEST_ROSTER_V2';
+  const hit = cache.get(key);
+  if (hit) {
+    try { return _hydrateRosterRecords_(JSON.parse(hit)); }
+    catch (_) { /* fall through */ }
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const priorityTabs = ['2026', CONFIG.FORM.DATA_SHEET]; // prefer current year, then legacy/intake
+  const additionalTabs = ['2024','2023']; // include prior cohorts for broader lookup
+  const seen = new Set();
+  const rows = [];
+  const packed = [];
+
+  const allTabs = [...priorityTabs, ...additionalTabs];
+
+  allTabs.forEach(tab => {
+    const sh = ss.getSheetByName(tab);
+    if (!sh || sh.getLastRow() < 2) return;
+
+    const lc = sh.getLastColumn();
+    const header = sh.getRange(1,1,1,lc).getValues()[0].map(h => String(h||'').trim());
+    const norm = s => String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'');
+    const idx = new Map(header.map((h,i)=>[norm(h), i]));
+
+    const col = {
+      id    : idx.get('cpsidnumber') ?? idx.get('cpsid') ?? idx.get('id') ?? idx.get('studentid'),
+      first : idx.get('firstname') ?? idx.get('first') ?? idx.get('fname') ?? idx.get('givenname'),
+      last  : idx.get('lastname')  ?? idx.get('last')  ?? idx.get('lname') ?? idx.get('surname') ?? idx.get('familyname'),
+      full  : idx.get('fullname') ?? idx.get('studentname') ?? idx.get('firstnamelastname') ?? idx.get('name'),
+      school: idx.get('school'),
+      grade : idx.get('currentgradelevel') ?? idx.get('grade') ?? idx.get('gradelvl') ?? idx.get('gradelevel'),
+    };
+    if (col.id == null) return;
+
+    const vals = sh.getRange(2,1, sh.getLastRow()-1, lc).getValues();
+    vals.forEach((r, i) => {
+      const id = String(r[col.id] || '').trim();
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      const first = col.first != null ? String(r[col.first] || '').trim() : '';
+      const last  = col.last  != null ? String(r[col.last ] || '').trim() : '';
+      const fullFromCols = (first || last) ? (first + ' ' + last).trim() : '';
+      const full = col.full != null ? (String(r[col.full] || '').trim() || fullFromCols) : fullFromCols;
+      const school = col.school != null ? String(r[col.school] || '').trim() : '';
+      const grade  = col.grade  != null ? String(r[col.grade ] || '').trim() : '';
+      const packedRow = [
+        id,
+        first,
+        last,
+        full,
+        school,
+        grade,
+        tab,
+        tab === CONFIG.FORM.DATA_SHEET ? (i + 2) : null
+      ];
+      packed.push(packedRow);
+      const hydrated = _hydrateRosterRecords_([packedRow])[0];
+      if (hydrated) rows.push(hydrated);
+    });
+  });
+
+  try {
+    cache.put(key, JSON.stringify(packed), 300);
+  } catch (_) {
+    // If cache exceeds size limits, safely ignore (we still return computed rows)
+  }
+  return rows;
 }
 
 /** Suggest by ID or name */
 function suggestPeople(query, limit){
   const q = _norm_(query); if (!q) return [];
   const n = Math.max(1, Math.min(Number(limit)||10, 20));
-  const C = CONFIG.FORM.COLS;
-  const items = _dataRows_().map((r,i)=>{
-    const first=r[C.firstName]||'', last=r[C.lastName]||'';
-    const id=r[C.cpsIdNumber]||'', school=r[C.school]||'', grade=r[C.currentGradeLevel]||'';
-    const full = `${first} ${last}`.trim();
-    return {rowIndex:i+2, firstName:first, lastName:last, id, school, grade,
-            _n:{id:_norm_(id), first:_norm_(first), last:_norm_(last), full:_norm_(full), school:_norm_(school), grade:_norm_(grade)},
-            label:`${full}${id?' - '+id:''} (${school} - ${grade})`};
-  });
+  const items = _getSuggestRoster_();
 
   function score(p){
     const fields=[p._n.id,p._n.first,p._n.last,p._n.full,p._n.school,p._n.grade];
@@ -66,8 +156,17 @@ function suggestPeople(query, limit){
 
   return items.map(p=>({p,s:score(p)})).filter(x=>x.s>0)
     .sort((a,b)=>b.s-a.s||a.p.lastName.localeCompare(b.p.lastName))
-    .slice(0,n).map(({p})=>({label:p.label,value:p.id||p.label,firstName:p.firstName,lastName:p.lastName,
-                              id:p.id,school:p.school,grade:p.grade,rowIndex:p.rowIndex}));
+    .slice(0,n)
+    .map(({p})=>({
+      label:p.label,
+      value:p.id || p.label,
+      firstName:p.firstName,
+      lastName:p.lastName,
+      id:p.id,
+      school:p.school,
+      grade:p.grade,
+      rowIndex:p.rowIndex
+    }));
 }
 
 
@@ -157,5 +256,10 @@ function submitForm(payload){
   row[C.comments]=payload.comments||'';
 
   sh.appendRow(row.map(v=>v===undefined?'':v));
+  try {
+    const cache = CacheService.getScriptCache();
+    cache.remove('FORM_SUGGEST_ROSTER_V2');
+    cache.remove('FORM_DATA_ROWS_V1');
+  } catch (_) {}
   return {ok:true,message:'Submission saved to 2026.'};
 }

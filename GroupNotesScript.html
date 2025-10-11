@@ -1,8 +1,71 @@
 <!-- GroupNotesScript.html -->
 
 <script>
+(() => {
+  if (window.__OFY_groupNotesInitialized) return;
+  window.__OFY_groupNotesInitialized = true;
+
   const GROUP_ORDER = ['Bears','Bulls','Cubs','Fire','Soxs','Stars'];
   let ALL_MENTORS = [];
+  const utils = window.ClientUtils || {};
+  const fallbackRunner = () => (window.google && google.script && google.script.run) ? google.script.run : null;
+  const baseRunner = typeof utils.getRunner === 'function' ? utils.getRunner : fallbackRunner;
+  const runner = () => baseRunner();
+  const esc = typeof utils.esc === 'function'
+    ? (value) => utils.esc(value)
+    : (s => String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
+  const setStatus = utils.createStatusSetter
+    ? utils.createStatusSetter('status')
+    : function(msg, tone = 'info'){
+        const el = document.getElementById('status');
+        if (!el) return;
+        if (!msg){
+          el.textContent = '';
+          el.dataset.state = 'info';
+          el.setAttribute('hidden','');
+          return;
+        }
+        const kind = tone === 'bad' ? 'bad' : tone === 'ok' ? 'ok' : 'info';
+        el.textContent = msg;
+        el.dataset.state = kind;
+        el.removeAttribute('hidden');
+      };
+  const callServer = typeof utils.call === 'function'
+    ? (method, args = [], options) => utils.call(method, args, options)
+    : (method, args = [], { onSuccess, onFailure } = {}) => {
+        const runner = baseRunner();
+        if (!runner || typeof runner[method] !== 'function') {
+          const err = new Error('Apps Script not available');
+          if (typeof onFailure === 'function') {
+            try { onFailure(err); } catch (_) {}
+          }
+          return Promise.reject(err);
+        }
+        const argArray = Array.isArray(args) ? args : [args];
+        return new Promise((resolve, reject) => {
+          const proxy = runner
+            .withSuccessHandler(res => {
+              if (typeof onSuccess === 'function') {
+                try { onSuccess(res); } catch (_) {}
+              }
+              resolve(res);
+            })
+            .withFailureHandler(err => {
+              if (typeof onFailure === 'function') {
+                try { onFailure(err); } catch (_) {}
+              }
+              reject(err);
+            });
+          try {
+            proxy[method](...argArray);
+          } catch (err) {
+            if (typeof onFailure === 'function') {
+              try { onFailure(err); } catch (_) {}
+            }
+            reject(err);
+          }
+        });
+      };
 
   // ---- Show any JS error in the UI
   window.addEventListener('error', (e) => {
@@ -12,20 +75,6 @@
   });
 
   // ---------- Utilities ----------
-  function setStatus(msg, tone = 'info'){
-    const el = document.getElementById('status');
-    if (!el) return;
-    if (!msg){
-      el.textContent = '';
-      el.dataset.state = 'info';
-      el.setAttribute('hidden','');
-      return;
-    }
-    const kind = tone === 'bad' ? 'bad' : tone === 'ok' ? 'ok' : 'info';
-    el.textContent = msg;
-    el.dataset.state = kind;
-    el.removeAttribute('hidden');
-  }
   function asBool(x) {
     if (x === true || x === false) return x;
     const s = (x == null ? '' : String(x)).trim().toLowerCase();
@@ -34,27 +83,25 @@
     return null;
   }
 
-  // stricter runner: returns null if google.script.run isn't injected
-  const runner = () => (window.google && google.script && google.script.run) ? google.script.run : null;
-
   // ---------- Promise wrappers ----------
   function loadMentorsAsync(activeOnly = true){
-    return new Promise(resolve => {
-      const r = runner();
-      if (!r) { ALL_MENTORS = []; return resolve(ALL_MENTORS); }
-      r.withSuccessHandler(list => { ALL_MENTORS = Array.isArray(list) ? list : []; resolve(ALL_MENTORS); })
-       .withFailureHandler(err => { console.warn('getMentors failed:', err); ALL_MENTORS = []; resolve(ALL_MENTORS); })
-       .getMentors(activeOnly);
-    });
+    return callServer('getMentors', [activeOnly])
+      .then(list => {
+        ALL_MENTORS = Array.isArray(list) ? list : [];
+        return ALL_MENTORS;
+      })
+      .catch(err => {
+        console.warn('getMentors failed:', err);
+        ALL_MENTORS = [];
+        return ALL_MENTORS;
+      });
   }
   function getRosterByDateAsync(dateStr){
-    return new Promise(resolve => {
-      const r = runner();
-      if (!r) { setStatus('Apps Script not available.', 'bad'); return resolve({}); }
-      r.withSuccessHandler(res => resolve(res))
-       .withFailureHandler(err => { setStatus('Server error: ' + (err?.message || err), 'bad'); resolve({}); })
-       .getRosterByDate(dateStr);
-    });
+    return callServer('getRosterByDate', [dateStr])
+      .catch(err => {
+        setStatus('Server error: ' + (err?.message || err), 'bad');
+        return {};
+      });
   }
   async function ensureMentorsLoaded(){
     if (!Array.isArray(ALL_MENTORS) || ALL_MENTORS.length === 0){
@@ -131,8 +178,8 @@
     card.dataset.group = toGroup;
     col.querySelector('.cards').appendChild(card);
 
-    const r = runner(); if (!r) return;
-    r.withSuccessHandler(res => {
+    callServer('moveMember', [payload.id, payload.fromGroup, toGroup, dateStr])
+      .then(res => {
         if (!res?.ok) {
           originalParent.appendChild(card);
           card.dataset.group = payload.fromGroup;
@@ -141,12 +188,11 @@
           setStatus(`Moved ${card.dataset.name || payload.id} to ${toGroup}.`, 'ok');
         }
       })
-     .withFailureHandler(err => {
+      .catch(err => {
         originalParent.appendChild(card);
         card.dataset.group = payload.fromGroup;
         setStatus('Server error: ' + (err?.message || err), 'bad');
-      })
-     .moveMember(payload.id, payload.fromGroup, toGroup, dateStr);
+      });
   }
 
   // ---------- Details modal ----------
@@ -158,7 +204,7 @@
     if (status.color === 'bad') {
       body.innerHTML = `<p><strong>Status:</strong> Not in DB</p><ul><li>Need to complete an intake form</li></ul>`;
     } else if (status.missing.length) {
-      body.innerHTML = `<p><strong>Missing items:</strong></p><ul>${status.missing.map(x => `<li>${x}</li>`).join('')}</ul>`;
+      body.innerHTML = `<p><strong>Missing items:</strong></p><ul>${status.missing.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`;
     } else {
       body.innerHTML = `<p>All required items are complete ✅</p>`;
     }
@@ -178,22 +224,59 @@
     const sugg    = noteEl.querySelector('.suggestions');
 
     const selected = noteEl._selectedMentors || (noteEl._selectedMentors = []);
+    let pendingMerge = []; // Remember server-provided mentors for name hydration
+    const mentorsReady = ensureMentorsLoaded().catch(err => {
+      console.warn('Mentor preload failed:', err);
+      return [];
+    });
 
     function renderChips(){
       chipsEl.innerHTML = '';
       selected.forEach(m => {
         const chip = document.createElement('span');
         chip.className = 'chip';
-        chip.innerHTML = `${m.name}<button title="Remove" aria-label="Remove mentor">&times;</button>`;
-        chip.querySelector('button').addEventListener('click', () => {
+        chip.textContent = m.name || m.id;
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.title = 'Remove';
+        removeBtn.setAttribute('aria-label', 'Remove mentor');
+        removeBtn.textContent = '×';
+        removeBtn.addEventListener('click', () => {
           const idx = selected.findIndex(x => String(x.id||'').toUpperCase() === String(m.id||'').toUpperCase());
           if (idx >= 0) selected.splice(idx,1);
           renderChips();
         });
+        chip.appendChild(removeBtn);
         chipsEl.appendChild(chip);
       });
     }
     noteEl._renderChips = renderChips;
+
+    function mergeMentorList(list, remember = true){
+      const normalized = Array.isArray(list)
+        ? list
+            .map(m => ({
+              id: String(m?.id || '').trim().toUpperCase(),
+              name: String(m?.name || '').trim()
+            }))
+            .filter(m => m.id)
+        : [];
+      if (remember) pendingMerge = normalized;
+      normalized.forEach(item => {
+        const existing = selected.find(x => String(x.id||'').toUpperCase() === item.id);
+        let name = item.name;
+        if (!name) {
+          const match = ALL_MENTORS.find(x => String(x.id||'').trim().toUpperCase() === item.id);
+          name = match?.name || item.id;
+        }
+        if (existing) {
+          if (!existing.name || existing.name === existing.id) existing.name = name;
+        } else {
+          selected.push({ id: item.id, name });
+        }
+      });
+      renderChips();
+    }
 
     function closeSuggestions(){ sugg.classList.remove('open'); sugg.innerHTML=''; }
     function openSuggestions(items){
@@ -237,11 +320,26 @@
     });
     input.addEventListener('blur', () => setTimeout(closeSuggestions, 120));
 
+    const pickerApi = {
+      mergeMentors(list){
+        mergeMentorList(list);
+      },
+      getSelection(){
+        return selected.slice();
+      }
+    };
+    noteEl._mentorPicker = pickerApi;
+
+    mentorsReady.then(() => {
+      if (pendingMerge.length) mergeMentorList(pendingMerge, false);
+    });
+
     renderChips();
+    return pickerApi;
   }
 
   // ---------- Render ----------
-  function renderBoard(roster){
+  function renderBoard(roster, prefillMap = {}){
     const board = document.getElementById('board');
     if (!board) return;
     board.innerHTML = '';
@@ -266,16 +364,25 @@
     const order = [...known, ...unexpected];
 
     order.forEach(groupName => {
+      const prefill = prefillMap[groupName] || {};
+      prefillMap[groupName] = prefill;
+      const noteData = prefill.note || null;
+      const prefillMentors = Array.isArray(prefill.mentors) ? prefill.mentors : [];
       const col = document.createElement('div');
       col.className = 'group';
       col.dataset.group = groupName;
-      col.innerHTML = `<h3>${groupName}</h3><div class="cards"></div>`;
+      const heading = document.createElement('h3');
+      heading.textContent = groupName;
+      const cardsWrap = document.createElement('div');
+      cardsWrap.className = 'cards';
+      col.appendChild(heading);
+      col.appendChild(cardsWrap);
 
       col.addEventListener('dragover', onDragOver);
       col.addEventListener('dragleave', onDragLeave);
       col.addEventListener('drop', onDropGroup);
 
-      const container = col.querySelector('.cards');
+      const container = cardsWrap;
 
       // Cards
       (roster[groupName] || []).forEach(person => {
@@ -289,23 +396,45 @@
         const status = computeStatus(person);
         const extra = [person.school, person.grade].filter(Boolean).join(' · ');
 
-        card.innerHTML = `
-          <div class="card-header">
-            <div class="card-title">
-              <span class="status-dot ${status.color}" title="${status.label}"></span>
-              <span class="name">${person.name}</span>
-              <span class="muted id-span">(${person.id})</span>
-            </div>
-            <button type="button" class="menu-btn" title="Edit ID" aria-label="Edit ID">
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="5" cy="12" r="2"></circle>
-                <circle cx="12" cy="12" r="2"></circle>
-                <circle cx="19" cy="12" r="2"></circle>
-              </svg>
-            </button>
-          </div>
-          ${extra ? `<div class="muted">${extra}</div>` : ''}
+        const header = document.createElement('div');
+        header.className = 'card-header';
+        const titleWrap = document.createElement('div');
+        titleWrap.className = 'card-title';
+        const dot = document.createElement('span');
+        dot.className = `status-dot ${status.color}`;
+        dot.title = status.label;
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'name';
+        nameSpan.textContent = person.name || person.id || 'Unknown';
+        const idSpan = document.createElement('span');
+        idSpan.className = 'muted id-span';
+        idSpan.textContent = `(${person.id || '—'})`;
+        titleWrap.appendChild(dot);
+        titleWrap.appendChild(nameSpan);
+        titleWrap.appendChild(idSpan);
+
+        const menuBtn = document.createElement('button');
+        menuBtn.type = 'button';
+        menuBtn.className = 'menu-btn';
+        menuBtn.title = 'Edit ID';
+        menuBtn.setAttribute('aria-label', 'Edit ID');
+        menuBtn.innerHTML = `
+          <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="5" cy="12" r="2"></circle>
+            <circle cx="12" cy="12" r="2"></circle>
+            <circle cx="19" cy="12" r="2"></circle>
+          </svg>
         `;
+        header.appendChild(titleWrap);
+        header.appendChild(menuBtn);
+
+        card.appendChild(header);
+        if (extra) {
+          const extraEl = document.createElement('div');
+          extraEl.className = 'muted';
+          extraEl.textContent = extra;
+          card.appendChild(extraEl);
+        }
 
         card.addEventListener('dragstart', onDragStart);
         card.addEventListener('dragend', onDragEnd);
@@ -316,7 +445,6 @@
           openDetailModal(person, status);
         });
 
-        const menuBtn = card.querySelector('.menu-btn');
         menuBtn.addEventListener('mousedown', (e) => e.stopPropagation());
         menuBtn.addEventListener('click', (e) => { e.stopPropagation(); openEditIdModal(card); });
 
@@ -346,50 +474,35 @@
       `;
       col.appendChild(note);
 
-      wireMentorPicker(note);
+      const mentorPicker = wireMentorPicker(note);
+      const topicInput = note.querySelector('.note-topic');
+      const summaryInput = note.querySelector('.note-summary');
+      const durationInput = note.querySelector('.note-duration');
+      const statusEl = note.querySelector('.note-status');
 
-      const dateStr = document.getElementById('datePicker').value;
-      const r = runner();
-      if (r) {
-        r.withSuccessHandler(res => {
-            if (res?.ok && res.note) {
-              note.querySelector('.note-topic').value = res.note.topic || '';
-              note.querySelector('.note-summary').value = res.note.summary || '';
-              note.querySelector('.note-duration').value = res.note.duration || '';
-              note.querySelector('.note-status').textContent = 'Up to date';
-            }
-          })
-         .withFailureHandler(err => {
-            console.warn('Prefill error:', err);
-          })
-         .getLatestGroupContactSession(dateStr, groupName);
+      if (noteData) {
+        topicInput.value = noteData.topic || '';
+        summaryInput.value = noteData.summary || '';
+        durationInput.value = noteData.duration || '';
+        statusEl.textContent = 'Up to date';
+      } else {
+        topicInput.value = '';
+        summaryInput.value = '';
+        durationInput.value = '';
+        statusEl.textContent = 'No note yet';
+      }
 
-        r.withSuccessHandler(list => {
-            const selected = note._selectedMentors || (note._selectedMentors = []);
-            const have = new Set(selected.map(m => String(m.id||'').toUpperCase()));
-            (list || []).forEach(m => {
-              const idU = String(m.id || '').toUpperCase();
-              if (!idU || have.has(idU)) return;
-              const match = ALL_MENTORS.find(x => String(x.id||'').toUpperCase() === idU);
-              selected.push({ id: idU, name: match ? match.name : idU });
-              have.add(idU);
-            });
-            note._renderChips?.();
-          })
-         .withFailureHandler(err => {
-            console.warn('getGroupMentors error:', err);
-          })
-         .getGroupMentors(dateStr, groupName);
+      if (prefillMentors.length) {
+        mentorPicker?.mergeMentors(prefillMentors);
       }
 
       // ---------- Save handler (unified, no after-call chaining)
       const saveBtn = note.querySelector('.note-save');
-      const statusEl = note.querySelector('.note-status');
 
       saveBtn.addEventListener('click', () => {
-        const topic = note.querySelector('.note-topic').value.trim();
-        const summary = note.querySelector('.note-summary').value.trim();
-        const duration = Number(note.querySelector('.note-duration').value || 0);
+        const topic = topicInput.value.trim();
+        const summary = summaryInput.value.trim();
+        const duration = Number(durationInput.value || 0);
 
         // Gather participants from the visible cards in this column
         const participants = Array.from(container.querySelectorAll('.card'))
@@ -407,39 +520,38 @@
         statusEl.textContent = 'Saving…';
         saveBtn.disabled = true;
 
-        const r2 = runner();
-        if (!r2) {
-          setStatus('Apps Script not available. Open via the deployed web app URL.', 'bad');
-          statusEl.textContent = 'Error';
-          saveBtn.disabled = false;
-          return;
-        }
-
-        r2.withSuccessHandler(res => {
-              if (!res?.ok) {
-                statusEl.textContent = 'Error';
-                setStatus(res?.error || 'Could not save note.', 'bad');
-                saveBtn.disabled = false;
-                return;
-              }
-              statusEl.textContent = 'Saved';
-              setStatus(`Saved ${groupName} — ${res.participantsAdded} participants, ${res.mentorsAdded} mentors.`, 'ok');
-              saveBtn.disabled = false;
-            })
-          .withFailureHandler(err => {
+        callServer('saveFullGroupNote', [
+          document.getElementById('datePicker').value,
+          groupName,
+          topic,
+          summary,
+          duration,
+          participants,
+          mentors
+        ])
+          .then(res => {
+            saveBtn.disabled = false;
+            if (!res?.ok) {
               statusEl.textContent = 'Error';
-              saveBtn.disabled = false;
-              setStatus('Server error: ' + (err?.message || err), 'bad');
-            })
-          .saveFullGroupNote(
-            document.getElementById('datePicker').value,
-            groupName,
-            topic,
-            summary,
-            duration,
-            participants,
-            mentors
-          );
+              setStatus(res?.error || 'Could not save note.', 'bad');
+              return;
+            }
+            const participantsAdded = Number(res.participantsAdded || participants.length || 0);
+            const mentorsAdded = Number(res.mentorsAdded || mentors.length || 0);
+            mentorPicker?.mergeMentors(mentors);
+            statusEl.textContent = `Saved · ${participantsAdded} students · ${mentorsAdded} mentor${mentorsAdded === 1 ? '' : 's'}`;
+            note.dataset.contactId = res.contactId || note.dataset.contactId || '';
+            setStatus(`Saved ${groupName} — ${participantsAdded} participants, ${mentorsAdded} mentor${mentorsAdded === 1 ? '' : 's'}.`, 'ok');
+            setTimeout(() => { statusEl.textContent = 'Up to date'; }, 1500);
+            prefill.note = { topic, summary, duration };
+            prefill.mentors = mentors.slice();
+            prefill.contactId = res.contactId || prefill.contactId || null;
+          })
+          .catch(err => {
+            statusEl.textContent = 'Error';
+            saveBtn.disabled = false;
+            setStatus('Server error: ' + (err?.message || err), 'bad');
+          });
       });
 
       board.appendChild(col);
@@ -484,10 +596,8 @@
       idSpan.textContent = `(${newId})`;
       currentEditCard.dataset.id = newId;
 
-      const r = runner();
-      if (!r) { setStatus('Apps Script not available.', 'bad'); idSpan.textContent = `(${oldId})`; currentEditCard.dataset.id = oldId; closeEditIdModal(); return; }
-
-      r.withSuccessHandler(res => {
+      callServer('updateMemberId', [oldId, group, dateStr, newId])
+        .then(res => {
           if (!res?.ok) {
             idSpan.textContent = `(${oldId})`;
             currentEditCard.dataset.id = oldId;
@@ -496,15 +606,13 @@
             setStatus('ID updated.', 'ok');
             loadBoard();
           }
-          closeEditIdModal();
         })
-       .withFailureHandler(err => {
+        .catch(err => {
           idSpan.textContent = `(${oldId})`;
           currentEditCard.dataset.id = oldId;
           setStatus('Server error: ' + (err?.message || err), 'bad');
-          closeEditIdModal();
         })
-       .updateMemberId(oldId, group, dateStr, newId);
+        .finally(() => closeEditIdModal());
     });
   })();
 
@@ -519,7 +627,12 @@
     try {
       await ensureMentorsLoaded();                    // mentors first
       const roster = await getRosterByDateAsync(dateStr);
-      renderBoard(roster);
+      const groups = Object.keys(roster || {});
+      const prefillsRes = groups.length
+        ? await callServer('getGroupPrefill', [dateStr, groups]).catch(() => ({ groups: {} }))
+        : { groups: {} };
+      const prefills = prefillsRes && typeof prefillsRes === 'object' && prefillsRes.groups ? prefillsRes.groups : {};
+      renderBoard(roster, prefills);
     } catch (e) {
       console.error(e);
       setStatus('Load error: ' + (e?.message || e), 'bad');
@@ -539,19 +652,13 @@
     dateInput?.addEventListener('change', loadBoard);
 
     // First, verify Apps Script connectivity
-    const r = runner();
-    if (!r) {
-      setStatus('Apps Script not available. Open this page via the deployed web app.', 'bad');
-      return;
-    }
-    r.withSuccessHandler(() => {
-        // good to go
+    callServer('ping')
+      .then(() => {
         loadBoard();
       })
-     .withFailureHandler(err => {
+      .catch(err => {
         setStatus('Cannot reach server (ping failed): ' + (err?.message || err), 'bad');
-      })
-     .ping();
+      });
 
     // watchdog
     setTimeout(() => {
@@ -560,4 +667,5 @@
       }
     }, 12000);
   });
+})();
 </script>

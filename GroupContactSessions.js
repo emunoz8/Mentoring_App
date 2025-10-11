@@ -43,6 +43,10 @@ function ensureGroupContactSessionsSheet_() {
   return { sh, C };
 }
 
+function _groupSessionCacheKey_(dateYMD, groupName) {
+  return `GROUP_SESSION_V1_${dateYMD}_${String(groupName || '').toUpperCase()}`;
+}
+
 // ------------------ Core API ------------------
 /**
  * Create or update a group session (returns a ContactID)
@@ -62,19 +66,37 @@ function createOrUpdateGroupContactSession_(dateStr, groupName, topic, summary, 
 
   const { sh, C } = ensureGroupContactSessionsSheet_();
   const lastRow = sh.getLastRow();
-  const data = lastRow >= 2 ? sh.getRange(2,1,lastRow-1,sh.getLastColumn()).getValues() : [];
+  const lastCol = sh.getLastColumn();
+  const cacheKey = _groupSessionCacheKey_(date, group);
+  const cached = _scriptCacheGet_(cacheKey);
 
   let rowIdx = null;
-  for (let i = 0; i < data.length; i++) {
-    const r = data[i];
-    const d = ymd_(r[C.Date], tz);
-    const g = String(r[C.Group] || '').trim();
-    if (d === date && g === group) { rowIdx = i + 2; break; }
+  let contactId = null;
+  if (cached && typeof cached.row === 'number') {
+    const candidate = cached.row;
+    if (candidate >= 2 && candidate <= lastRow) {
+      const rowValues = sh.getRange(candidate, 1, 1, lastCol).getValues()[0];
+      const rowDate = ymd_(rowValues[C.Date], tz) || rowValues[C.Date];
+      const rowGroup = String(rowValues[C.Group] || '').trim();
+      if (rowDate === date && rowGroup === group) {
+        rowIdx = candidate;
+        contactId = String(rowValues[C.ContactID] || '').trim() || null;
+      }
+    }
+  }
+
+  if (rowIdx == null && lastRow >= 2) {
+    const data = sh.getRange(2,1,lastRow-1,lastCol).getValues();
+    for (let i = 0; i < data.length; i++) {
+      const r = data[i];
+      const d = ymd_(r[C.Date], tz);
+      const g = String(r[C.Group] || '').trim();
+      if (d === date && g === group) { rowIdx = i + 2; contactId = String(r[C.ContactID] || '').trim() || null; break; }
+    }
   }
 
   const now = new Date();
   if (rowIdx) {
-    let contactId = String(sh.getRange(rowIdx, C.ContactID + 1).getValue()).trim();
     if (!contactId) {
       contactId = Utilities.getUuid();
       sh.getRange(rowIdx, C.ContactID + 1).setValue(contactId);
@@ -83,10 +105,13 @@ function createOrUpdateGroupContactSession_(dateStr, groupName, topic, summary, 
     sh.getRange(rowIdx, C.Summary + 1).setValue(summary || '');
     sh.getRange(rowIdx, C.Duration + 1).setValue(Number(durationMinutes) || 0);
     sh.getRange(rowIdx, C.EditedAt + 1).setValue(now);
+    _scriptCachePut_(cacheKey, { row: rowIdx, contactId }, 300);
     return { ok:true, contactId, updated:true };
   } else {
     const contactId = Utilities.getUuid();
     sh.appendRow([contactId, date, group, topic || '', summary || '', Number(durationMinutes) || 0, now, now]);
+    const newRowIdx = sh.getLastRow();
+    _scriptCachePut_(cacheKey, { row: newRowIdx, contactId }, 300);
     return { ok:true, contactId, created:true };
   }
 }
@@ -104,12 +129,23 @@ function getContactIdForGroup_(dateStr, groupName) {
   const { sh, C } = ensureGroupContactSessionsSheet_();
   const lastRow = sh.getLastRow();
   if (lastRow < 2) return null;
+
+  const cacheKey = _groupSessionCacheKey_(date, group);
+  const cached = _scriptCacheGet_(cacheKey);
+  if (cached && cached.contactId) return cached.contactId || null;
+
   const vals = sh.getRange(2,1,lastRow-1,sh.getLastColumn()).getValues();
   for (let i = vals.length - 1; i >= 0; i--) {
     const r = vals[i];
     const d = ymd_(r[C.Date], tz);
     const g = String(r[C.Group] || '').trim();
-    if (d === date && g === group) return String(r[C.ContactID] || '').trim() || null;
+    if (d === date && g === group) {
+      const contactId = String(r[C.ContactID] || '').trim() || null;
+      if (contactId) {
+        _scriptCachePut_(cacheKey, { row: i + 2, contactId }, 300);
+      }
+      return contactId;
+    }
   }
   return null;
 }

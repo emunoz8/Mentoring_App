@@ -12,33 +12,55 @@
   </head>
   <body>
     <div class="app-shell">
-      <section class="hero panel">
-        <div class="hero-content">
-          <div>
+      <section class="hero panel participant-hero">
+        <div class="hero-header">
+          <div class="hero-heading">
             <h1>Participant Editor</h1>
             <p class="desc">Search the current roster, auto-fill live details, and save refreshed records into <strong>2026</strong>.</p>
           </div>
-          <div class="hero-controls" role="group" aria-label="Lookup controls">
-            <label class="hero-field hero-search" for="personSearch">
-              <span class="label">Search student</span>
-              <div class="suggest-wrap">
-                <input id="personSearch" type="text" placeholder="e.g., Jane, Doe, 123456" autocomplete="off" />
-                <ul id="suggestList" class="suggest-menu"></ul>
+          <div class="status-wrap">
+            <div id="statusBanner" class="status-pill" role="status" aria-live="polite" hidden></div>
+          </div>
+        </div>
+
+        <div class="lookup-grid" role="group" aria-label="Lookup controls">
+          <div class="lookup-card">
+            <span class="label">Search student</span>
+            <div class="suggest-wrap">
+              <input id="personSearch" type="text" placeholder="e.g., Jane, Doe, 123456" autocomplete="off" />
+              <ul id="suggestList" class="suggest-menu"></ul>
+            </div>
+            <p class="helper-text">Type 3+ characters. Use ↑/↓ and Enter to pick.</p>
+          </div>
+
+          <div class="lookup-card selection-card">
+            <span class="label">Selected participant</span>
+            <p id="selectedSummary" class="selected-summary muted">No participant selected</p>
+            <div id="selectedMeta" class="selected-meta">
+              <div class="selected-meta-item">
+                <span class="fact-label">CPS ID</span>
+                <span class="fact-value" id="selectedId">—</span>
               </div>
-              <span class="helper-text">Type at least 2 characters. Use ↑/↓ and Enter to pick.</span>
-            </label>
-            <label class="hero-field" for="lookupId">
-              <span class="label">CPS ID number</span>
-              <input id="lookupId" type="text" placeholder="e.g., 123456789" autocomplete="off" />
-            </label>
-            <div class="hero-buttons">
+              <div class="selected-meta-item">
+                <span class="fact-label">School</span>
+                <span class="fact-value" id="selectedSchool">—</span>
+              </div>
+              <div class="selected-meta-item">
+                <span class="fact-label">Grade</span>
+                <span class="fact-value" id="selectedGrade">—</span>
+              </div>
+            </div>
+            <button id="clearSelectionBtn" type="button" class="link-btn" hidden>Clear selection</button>
+          </div>
+
+          <div class="lookup-card id-card">
+            <span class="label" for="lookupId">CPS ID number</span>
+            <input id="lookupId" type="text" placeholder="e.g., 123456789" autocomplete="off" />
+            <div class="lookup-actions">
               <button id="searchBtn" class="btn btn-primary" type="button">Lookup</button>
               <button id="clearBtn" class="btn btn-ghost" type="button">Clear</button>
             </div>
           </div>
-        </div>
-        <div class="status-wrap">
-          <div id="statusBanner" class="status-pill" role="status" aria-live="polite" hidden></div>
         </div>
       </section>
 
@@ -66,6 +88,7 @@
             <h2>Participant details</h2>
             <p>Review, edit, and confirm before saving to the new program year.</p>
           </div>
+          <div id="saveIndicator" class="save-indicator" hidden>Saved!</div>
         </header>
         <div id="formContainer" class="form-body"></div>
         <div class="form-actions">
@@ -78,6 +101,11 @@
       </section>
     </div>
 
+    <script>
+      window.FORM_FIELDS = <?!= JSON.stringify(CONFIG.FORM.FIELDS); ?>;
+      window.FORM_REQUIRED_FIELDS = <?!= JSON.stringify(CONFIG.FORM.REQUIRED_KEYS); ?>;
+    </script>
+    <?!= include('ClientUtils'); ?>
     <?!= include('Suggest'); ?>
     <?!= include('FormScript'); ?>
   </body>

@@ -34,10 +34,6 @@ function saveGroupParticipants(contactId, participants) {
   const { sh, C } = ensureGroupContactParticipantsSheet_();
   const lastRow = sh.getLastRow();
   const lastCol = sh.getLastColumn();
-  const data = (lastRow >= 2) ? sh.getRange(2,1,lastRow-1,lastCol).getValues() : [];
-
-  // Keep all rows NOT matching this contactId
-  const keep = data.filter(r => String(r[C.ContactID] || '').trim() !== contactId);
 
   // Normalize & de-dupe incoming participants by id
   const now = new Date();
@@ -61,13 +57,21 @@ function saveGroupParticipants(contactId, participants) {
     })
     .filter(Boolean);
 
-  // Build final set to write back: keep + new rows
+  const data = (lastRow >= 2) ? sh.getRange(2,1,lastRow-1,lastCol).getValues() : [];
+  const keep = data.filter(r => String(r[C.ContactID] || '').trim() !== contactId);
   const finalRows = keep.concat(rows);
 
-  // Clear all data rows safely, then write back if any
-  _clearDataRows_(sh);
-  if (finalRows.length) {
-    sh.getRange(2, 1, finalRows.length, lastCol).setValues(finalRows);
+  const changed = rows.length || keep.length !== data.length;
+
+  if (changed) {
+    _clearDataRows_(sh);
+    if (finalRows.length) {
+      sh.getRange(2, 1, finalRows.length, lastCol).setValues(finalRows);
+    }
+    if (typeof _scriptCacheRemove_ === 'function') {
+      _scriptCacheRemove_('RECENT_META_V2');
+      _scriptCacheRemove_('RECENT_DATA_V2');
+    }
   }
 
   return { ok:true, contactId, added: rows.length, totalForContact: rows.length };

@@ -1,0 +1,113 @@
+<script>
+(() => {
+  if (window.ClientUtils) return;
+
+  function normalizeDate(input) {
+    if (input instanceof Date && !Number.isNaN(input.getTime())) return new Date(input.getTime());
+    if (input == null) return new Date();
+    const d = input instanceof Date ? new Date(input.getTime()) : new Date(input);
+    return Number.isNaN(d.getTime()) ? new Date() : d;
+  }
+
+  function formatYMD(date) {
+    const d = normalizeDate(date);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  const ESCAPE_LOOKUP = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  };
+  const ESCAPE_RE = /[&<>"']/g;
+
+  function esc(value) {
+    return String(value == null ? '' : value).replace(ESCAPE_RE, (c) => ESCAPE_LOOKUP[c] || c);
+  }
+
+  function resolveEl(target) {
+    if (typeof target === 'function') return target();
+    if (target && typeof target === 'object' && target.nodeType === Node.ELEMENT_NODE) return target;
+    return document.getElementById(target);
+  }
+
+  function normalizeTone(tone, message, fallback = 'info') {
+    if (typeof tone === 'boolean') return tone ? 'ok' : (message ? 'bad' : fallback);
+    if (tone === 'bad' || tone === 'ok' || tone === 'info') return tone;
+    return fallback;
+  }
+
+  function createStatusSetter(target, { defaultTone = 'info', hideWhenEmpty = true } = {}) {
+    return (message, tone = defaultTone) => {
+      const el = resolveEl(target);
+      if (!el) return;
+      const text = message == null ? '' : String(message);
+      if (!text) {
+        el.textContent = '';
+        if (el.dataset) el.dataset.state = defaultTone;
+        if (hideWhenEmpty) {
+          el.hidden = true;
+          el.setAttribute('hidden', '');
+        }
+        return;
+      }
+      const mode = normalizeTone(tone, text, defaultTone);
+      el.textContent = text;
+      if (el.dataset) el.dataset.state = mode;
+      el.hidden = false;
+      if (hideWhenEmpty) el.removeAttribute('hidden');
+    };
+  }
+
+  function getRunner() {
+    return (window.google && google.script && google.script.run) ? google.script.run : null;
+  }
+
+  function call(method, args = [], { onSuccess, onFailure, context } = {}) {
+    const runner = getRunner();
+    if (!runner || typeof runner[method] !== 'function') {
+      const err = new Error('Apps Script not available');
+      if (typeof onFailure === 'function') {
+        try { onFailure(err); } catch (_) {}
+      }
+      return Promise.reject(err);
+    }
+    const argArray = Array.isArray(args) ? args : [args];
+    return new Promise((resolve, reject) => {
+      const handleSuccess = (result) => {
+        if (typeof onSuccess === 'function') {
+          try { onSuccess(result); } catch (_) {}
+        }
+        resolve(result);
+      };
+      const handleFailure = (error) => {
+        if (typeof onFailure === 'function') {
+          try { onFailure(error); } catch (_) {}
+        }
+        reject(error);
+      };
+      const proxy = runner
+        .withSuccessHandler(handleSuccess)
+        .withFailureHandler(handleFailure);
+      try {
+        proxy[method].apply(context || proxy, argArray);
+      } catch (err) {
+        handleFailure(err);
+      }
+    });
+  }
+
+  window.ClientUtils = {
+    esc,
+    todayYMD: formatYMD,
+    getRunner,
+    createStatusSetter,
+    call,
+  };
+})();
+</script>

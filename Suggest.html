@@ -4,6 +4,15 @@
   const global = window.AppSuggest = window.AppSuggest || {};
   const getEl = (ref) => (typeof ref === 'string' ? document.getElementById(ref) : ref);
   const defaultRun = () => (window.google && google.script && google.script.run) || null;
+  const multiRegistry = new Set();
+  function closeMulti(except){
+    multiRegistry.forEach(ctrl => {
+      if (!ctrl || typeof ctrl.close !== 'function') return;
+      if (except && ctrl === except) return;
+      ctrl.close();
+    });
+  }
+  document.addEventListener('click', () => closeMulti(null));
   global.wireRemoteSuggest = function wireRemoteSuggest(options = {}) {
     const {
       input: inputRef,
@@ -54,6 +63,9 @@
       items = arr.map((it) => ({ ...it, label: formatLabel(it) || String(it.label || '') }));
       active = -1;
       list.innerHTML = '';
+      if (window?.console && typeof console.debug === 'function') {
+        console.debug('[Suggest] results', items.length, items);
+      }
       if (!items.length) {
         closeMenu();
         return;
@@ -163,5 +175,151 @@
       if (manualButton && manualHandler) manualButton.removeEventListener('click', manualHandler);
     };
   };
+
+  global.wireRosterSuggest = function wireRosterSuggest(options = {}) {
+    const defaultFormat = (it) => {
+      if (!it) return '';
+      const first = String(it.firstName || '').trim();
+      const last  = String(it.lastName || '').trim();
+      const full  = `${first} ${last}`.trim();
+      const ident = String(it.id || it.value || '').trim();
+      const meta  = [String(it.school || '').trim(), String(it.grade || '').trim()].filter(Boolean);
+      if (full && ident) {
+        return `${full} · ${ident}${meta.length ? ' (' + meta.join(' • ') + ')' : ''}`;
+      }
+      if (full) return meta.length ? `${full} (${meta.join(' • ')})` : full;
+      if (ident) return meta.length ? `${ident} (${meta.join(' • ')})` : ident;
+      return String(it.label || '').trim();
+    };
+
+    const merged = Object.assign(
+      {
+        minChars: 3,
+        limit: 10,
+        placeholder: 'Type 3+ characters (name or ID)…',
+        clearOnChoose: true,
+      },
+      options
+    );
+
+    const userFormat = typeof merged.formatLabel === 'function' ? merged.formatLabel : null;
+    merged.formatLabel = (item) => userFormat ? userFormat(item, defaultFormat) : defaultFormat(item);
+
+    if (typeof merged.run !== 'function') merged.run = defaultRun;
+
+    return global.wireRemoteSuggest(merged);
+  };
+
+  global.createMultiSelect = function createMultiSelect(config = {}) {
+    const opts = Array.isArray(config.options) ? config.options : [];
+    const placeholder = config.placeholder || 'Select options';
+    const hidden = config.hiddenInput || document.createElement('input');
+    if (!config.hiddenInput) hidden.type = 'hidden';
+
+    const root = document.createElement('div');
+    root.className = 'multi-select';
+
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'multi-select-trigger';
+
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'multi-select-label';
+    labelSpan.textContent = placeholder;
+
+    const caret = document.createElement('span');
+    caret.className = 'multi-select-caret';
+    caret.innerHTML = '&#9662;';
+
+    trigger.append(labelSpan, caret);
+
+    const menu = document.createElement('div');
+    menu.className = 'multi-select-menu';
+    const checkboxes = [];
+
+    opts.forEach(opt => {
+      const value = typeof opt === 'string' ? opt : String(opt && (opt.value ?? opt.label ?? ''));
+      if (!value) return;
+      const label = typeof opt === 'string' ? opt : String(opt.label ?? value);
+      const row = document.createElement('label');
+      row.className = 'multi-select-option';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = value;
+      const span = document.createElement('span');
+      span.textContent = label;
+      row.append(cb, span);
+      menu.appendChild(row);
+      checkboxes.push(cb);
+    });
+
+    if (!checkboxes.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-message';
+      empty.textContent = 'No options';
+      menu.appendChild(empty);
+    }
+
+    root.append(trigger, menu);
+
+    const formatLabel = (values) => {
+      if (!values.length) return placeholder;
+      if (values.length === 1) return values[0];
+      if (values.length === 2) return values.join(', ');
+      return `${values[0]}, ${values[1]} +${values.length - 2}`;
+    };
+
+    const getValues = () => checkboxes
+      .filter(cb => cb.checked)
+      .map(cb => String(cb.value || '').trim())
+      .filter(Boolean);
+
+    const sync = (emit = false) => {
+      const selected = getValues();
+      hidden.value = selected.join('; ');
+      labelSpan.textContent = formatLabel(selected);
+      trigger.classList.toggle('has-selection', selected.length > 0);
+      if (typeof config.onChange === 'function') config.onChange(selected);
+      if (emit) hidden.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    checkboxes.forEach(cb => cb.addEventListener('change', () => sync(true)));
+
+    const ctrl = {
+      root,
+      trigger,
+      menu,
+      hidden,
+      getValues,
+      setValues(values){
+        const arr = Array.isArray(values) ? values : String(values || '')
+          .split(/\s*[,;|]\s*/g)
+          .map(v => v.trim())
+          .filter(Boolean);
+        const set = new Set(arr.map(v => v.toLowerCase()));
+        checkboxes.forEach(cb => { cb.checked = set.has(String(cb.value || '').trim().toLowerCase()); });
+        sync(false);
+      },
+      clear(){
+        checkboxes.forEach(cb => cb.checked = false);
+        sync(true);
+      },
+      close(){ root.classList.remove('open'); },
+      open(){ closeMulti(ctrl); root.classList.add('open'); }
+    };
+
+    trigger.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (root.classList.contains('open')) ctrl.close();
+      else ctrl.open();
+    });
+    menu.addEventListener('click', (e) => e.stopPropagation());
+
+    sync(false);
+    multiRegistry.add(ctrl);
+    return ctrl;
+  };
+
 })();
 </script>

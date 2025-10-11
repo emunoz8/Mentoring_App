@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Student Sign-In</title>
+    <?!= include('Style'); ?>
+  </head>
+  <body>
+    <div class="app-shell login-shell">
+      <section class="hero panel">
+        <div class="hero-content">
+          <div>
+            <h1>Program Sign-In</h1>
+            <p class="desc">Select your circle, look up your name, and sign in. New students can add themselves in seconds.</p>
+          </div>
+          <div class="hero-controls" role="group" aria-label="Session controls">
+            <label class="hero-field" for="sessionDateInput">
+              <span class="label">Session date</span>
+              <input id="sessionDateInput" type="date" />
+            </label>
+            <div class="hero-buttons">
+              <button id="reloadSessionsBtn" class="btn btn-ghost" type="button">Refresh sessions</button>
+            </div>
+          </div>
+        </div>
+        <div class="status-wrap">
+          <div id="statusBanner" class="status-pill" role="status" aria-live="polite" hidden></div>
+        </div>
+      </section>
+
+      <section class="panel admin-panel" aria-labelledby="startHeading">
+        <header class="section-head">
+          <div class="section-title">
+            <h2 id="startHeading">Start a session</h2>
+            <p>Staff can open additional groups at any time. Students will see new sessions instantly.</p>
+          </div>
+        </header>
+        <form id="startSessionForm" class="session-form">
+          <label class="form-field">
+            <span class="label">Group label</span>
+            <input id="sessionLabelInput" type="text" placeholder="e.g., Bears" autocomplete="off" required />
+          </label>
+          <label class="form-field">
+            <span class="label">Date</span>
+            <input id="sessionDateField" type="date" required />
+          </label>
+          <fieldset class="session-type" aria-label="Sign-in type">
+            <legend class="label">Sign-in type</legend>
+            <label class="radio-pill">
+              <input type="radio" name="sessionType" value="individual" checked />
+              <span>Individual</span>
+            </label>
+            <label class="radio-pill">
+              <input type="radio" name="sessionType" value="group" />
+              <span>Group</span>
+            </label>
+          </fieldset>
+          <button class="btn btn-primary" type="submit">Start session</button>
+        </form>
+      </section>
+
+      <section class="panel" aria-labelledby="sessionListHeading" id="sessionChooser">
+        <header class="section-head">
+          <div class="section-title">
+            <h2 id="sessionListHeading">Active sessions today</h2>
+            <p>Tap your circle to start signing in.</p>
+          </div>
+        </header>
+        <div id="sessionList" class="session-list" role="list"></div>
+        <p id="sessionEmpty" class="muted empty-hint">No sessions yet. Start one above to get going.</p>
+      </section>
+
+      <section class="panel sign-in-panel" id="signInPanel" hidden aria-labelledby="signInHeading">
+        <header class="section-head">
+          <div class="section-title">
+            <h2 id="signInHeading">Sign in students</h2>
+            <p id="sessionSummary" class="muted"></p>
+          </div>
+          <div class="hero-buttons">
+            <button id="endSessionBtn" class="btn btn-ghost" type="button">End session</button>
+            <button id="changeSessionBtn" class="btn" type="button">Change session</button>
+          </div>
+        </header>
+
+        <div class="sign-in-grid">
+          <section class="lookup-card sign-in-card" aria-label="Find your name">
+            <span class="label">Look up your name</span>
+            <input id="studentSearch" type="text" autocomplete="off" placeholder="Start typing your first or last name…" />
+            <ul id="studentSuggestList" class="suggest-list" role="listbox" aria-label="Student matches"></ul>
+            <div id="selectedStudentCard" class="selection-card muted">
+              <p id="selectedStudentSummary">No student selected.</p>
+              <dl id="selectedStudentMeta" class="selected-meta is-empty">
+                <div class="selected-meta-item">
+                  <dt class="fact-label">Student ID</dt>
+                  <dd class="fact-value">—</dd>
+                </div>
+                <div class="selected-meta-item">
+                  <dt class="fact-label">School</dt>
+                  <dd class="fact-value">—</dd>
+                </div>
+                <div class="selected-meta-item">
+                  <dt class="fact-label">Email</dt>
+                  <dd class="fact-value">—</dd>
+                </div>
+              </dl>
+            </div>
+            <button id="signInKnownBtn" class="btn btn-primary" type="button" disabled>Sign in</button>
+          </section>
+
+          <section class="lookup-card manual-card" aria-label="Add a new student">
+            <span class="label">Can’t find your name?</span>
+            <p class="helper-text">Fill in the fields below and we’ll add you for next time.</p>
+            <form id="manualEntryForm" class="manual-form">
+              <label class="form-field">
+                <span class="label">Student ID *</span>
+                <input id="manualId" type="text" required autocomplete="off" />
+              </label>
+              <label class="form-field">
+                <span class="label">First name *</span>
+                <input id="manualFirst" type="text" required autocomplete="off" />
+              </label>
+              <label class="form-field">
+                <span class="label">Last name *</span>
+                <input id="manualLast" type="text" required autocomplete="off" />
+              </label>
+              <label class="form-field">
+                <span class="label">School *</span>
+                <input id="manualSchool" type="text" required autocomplete="off" />
+              </label>
+              <label class="form-field">
+                <span class="label">Email *</span>
+                <input id="manualEmail" type="email" required autocomplete="off" />
+              </label>
+              <label class="form-field">
+                <span class="label">Grade (optional)</span>
+                <input id="manualGrade" type="text" autocomplete="off" />
+              </label>
+              <button class="btn" type="submit">Add &amp; sign in</button>
+            </form>
+          </section>
+        </div>
+      </section>
+    </div>
+
+    <?!= include('ClientUtils'); ?>
+    <?!= include('Suggest'); ?>
+    <?!= include('LoginScript'); ?>
+  </body>
+</html>

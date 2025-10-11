@@ -70,16 +70,16 @@ function queue_ensureSignInLogSheet_() {
   // Seed base columns if empty/blank
   if (sh.getLastRow() < 1 || sh.getLastColumn() < 1) {
     sh.clear();
-    sh.getRange(1,1,1,10).setValues([[
-      'Timestamp','ID number','First Name + Last Name','School','Mentor',
+    sh.getRange(1,1,1,11).setValues([[
+      'Timestamp','ID number','First Name + Last Name','School','Group','Mentor',
       'Status','ClaimedBy','ClaimedAt','ProcessedAt','ContactID'
     ]]);
   } else {
     const lc0 = Math.max(1, sh.getLastColumn());
     const first = sh.getRange(1,1,1,lc0).getValues()[0];
     if (first.every(v => String(v||'').trim()==='')) {
-      sh.getRange(1,1,1,10).setValues([[
-        'Timestamp','ID number','First Name + Last Name','School','Mentor',
+      sh.getRange(1,1,1,11).setValues([[
+        'Timestamp','ID number','First Name + Last Name','School','Group','Mentor',
         'Status','ClaimedBy','ClaimedAt','ProcessedAt','ContactID'
       ]]);
     }
@@ -95,6 +95,7 @@ function queue_ensureSignInLogSheet_() {
     Name       : idx.get('firstnamelastname') ?? idx.get('name') ?? idx.get('fullname') ??
                  idx.get('studentname') ?? idx.get('firstlast') ?? idx.get('fullnamestudent'),
     School     : idx.get('school')    ?? idx.get('site'),
+    Group      : idx.get('group')     ?? idx.get('circle') ?? idx.get('session'),
     MentorRaw  : idx.get('mentor')    ?? idx.get('mentorid') ?? idx.get('staff') ?? idx.get('advisor'),
     Status     : idx.get('status'),
     ClaimedBy  : idx.get('claimedby'),
@@ -105,6 +106,7 @@ function queue_ensureSignInLogSheet_() {
 
   // Add any missing admin columns to the RIGHT so we can write to them
   const needed = [
+    ['Group','Group'],
     ['Status','Status'],
     ['ClaimedBy','ClaimedBy'],
     ['ClaimedAt','ClaimedAt'],
@@ -121,6 +123,7 @@ function queue_ensureSignInLogSheet_() {
     const idx2 = new Map(header2.map((h,i)=>[_normKey_(h), i]));
     const resolve = (cur, ...keys) => C[cur] ?? keys.map(k=>idx2.get(k)).find(x=>x!=null);
 
+    C.Group       = resolve('Group','group','circle','session');
     C.Status      = resolve('Status','status');
     C.ClaimedBy   = resolve('ClaimedBy','claimedby');
     C.ClaimedAt   = resolve('ClaimedAt','claimedat');
@@ -159,6 +162,7 @@ function listQueue(dateStr) {
     if (!id) continue;
 
     const name   = String(C.Name   != null ? r[C.Name]   : '').trim();
+    const group  = String(C.Group  != null ? r[C.Group]  : '').trim();
     const school = String(C.School != null ? r[C.School] : '').trim();
 
     const mentorRaw = String(C.MentorRaw != null ? r[C.MentorRaw] : '').trim();
@@ -198,6 +202,7 @@ function listQueue(dateStr) {
       rowIndex: i + 2,
       id,
       displayName,
+      group,
       school,
       mentorId,
       mentorName,
@@ -428,8 +433,6 @@ function markProcessedByIds(dateStr, ids, contactId, statusOpt) {
     try { lock.releaseLock(); } catch(_) {}
   }
 }
-
-
 
 
 

@@ -25,6 +25,11 @@ function _scriptCachePut_(k, v, sec){
     CacheService.getScriptCache().put(k, JSON.stringify(v), sec);
   } catch(_) {}
 }
+function _scriptCacheRemove_(k){
+  try {
+    CacheService.getScriptCache().remove(k);
+  } catch(_) {}
+}
 
 function ensureContactSessionsSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -158,6 +163,8 @@ function ensureContactParticipantsSheet_() {
 function saveIndividualContactSession(dateStr, people, payload, queueRowIndices) {
   const tz = Session.getScriptTimeZone() || 'America/Chicago';
   const dateYMD = ymd_(dateStr, tz) || Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  const tag = `[IndivNote ${dateYMD}]`;
+  const tStart = Date.now();
 
   // normalize unique student IDs
   const uniq = new Map();
@@ -220,22 +227,28 @@ function saveIndividualContactSession(dateStr, people, payload, queueRowIndices)
   const lock = LockService.getDocumentLock();
   try {
     lock.waitLock(30000);
+    const tLocked = Date.now();
 
-    // Write session + links
     sessSh.getRange(sessSh.getLastRow()+1, 1, 1, widthSess).setValues([sessionRow]);
     if (linkRows.length) {
       linkSh.getRange(linkSh.getLastRow()+1, 1, linkRows.length, widthLink).setValues(linkRows);
     }
+    const tWritten = Date.now();
 
-    // Optionally mark sign_in_log rows processed
     let processedInfo = null;
+    let processDuration = 0;
     if (rowsToMark.length && typeof markProcessed === 'function') {
       try {
+        const tProcStart = Date.now();
         processedInfo = markProcessed(rowsToMark, contactId);
+        processDuration = Date.now() - tProcStart;
       } catch (e) {
         processedInfo = { ok:false, error: e && e.message ? e.message : String(e) };
       }
     }
+
+    const tEnd = Date.now();
+    console.log(`${tag} students=${uniq.size} session=${tWritten - tLocked}ms lock=${tLocked - tStart}ms mark=${processDuration}ms total=${tEnd - tStart}ms queueRows=${rowsToMark.length}`);
 
     return {
       ok: true,
@@ -245,6 +258,7 @@ function saveIndividualContactSession(dateStr, people, payload, queueRowIndices)
     };
 
   } catch (e) {
+    console.log(`${tag} failed after ${Date.now() - tStart}ms error=${e && e.message}`);
     return { ok:false, error: e && e.message ? e.message : String(e) };
   } finally {
     try { lock.releaseLock(); } catch(_) {}
@@ -263,8 +277,12 @@ function listRecentContactsForIds(ids, perId){
   const { C: L } = ensureContactParticipantsSheet_();
   const { sessVals, linkVals } = _getRecentData_();
 
-  const mentorNameById = new Map();
-  try { (getMentors(true)||[]).forEach(m => mentorNameById.set(String(m.id||'').toUpperCase(), m.name||m.id)); } catch(_){}
+  let mentorNameById;
+  try {
+    mentorNameById = getMentorNameMap_(true);
+  } catch (_) {
+    mentorNameById = new Map();
+  }
 
   const byContact = new Map();
   sessVals.forEach(r=>{
@@ -373,17 +391,20 @@ function _getRecentData_() {
   const { sh: sessSh } = ensureContactSessionsSheet_();
   const { sh: linkSh } = ensureContactParticipantsSheet_();
 
-  const metaNow = JSON.stringify({ s:sessSh.getLastRow(), l:linkSh.getLastRow() });
-  const metaHit = cache.get('RECENT_META_V1');
-  const dataHit = cache.get('RECENT_DATA_V1');
+  const metaKey = 'RECENT_META_V2';
+  const dataKey = 'RECENT_DATA_V2';
+  const metaNow = JSON.stringify({ s:sessSh.getLastRow(), l:linkSh.getLastRow(), ts: sessSh.getLastColumn() });
+
+  const metaHit = cache.get(metaKey);
+  const dataHit = cache.get(dataKey);
 
   if (metaHit === metaNow && dataHit) return JSON.parse(dataHit);
 
   const sessVals = sessSh.getRange(2,1, Math.max(0, sessSh.getLastRow()-1), sessSh.getLastColumn()).getValues();
   const linkVals = linkSh.getRange(2,1, Math.max(0, linkSh.getLastRow()-1), linkSh.getLastColumn()).getValues();
 
-  cache.put('RECENT_META_V1', metaNow, 60);
-  cache.put('RECENT_DATA_V1', JSON.stringify({ sessVals, linkVals }), 60);
+  cache.put(metaKey, metaNow, 60);
+  cache.put(dataKey, JSON.stringify({ sessVals, linkVals }), 60);
   return { sessVals, linkVals };
 }
 
