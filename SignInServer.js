@@ -431,6 +431,12 @@ function bootstrapKnownStudents() {
     sources: {}
   };
 
+  const SOURCE_PRIORITY = {
+    form_2026: 2,
+    sign_in_log: 1,
+    attendance: 0
+  };
+
   const { sh: knownSh, C: KC } = signinEnsureKnownStudentsSheet_();
   const knownWidth = Math.max(1, knownSh.getLastColumn());
   const existingRows = knownSh.getLastRow() >= 2
@@ -468,20 +474,27 @@ function bootstrapKnownStudents() {
         school: '',
         email: '',
         grade: '',
-        lastSignIn: null
+        lastSignIn: null,
+        _priority: {}
       };
       aggregates.set(id, entry);
     }
-    function setIfEmpty(field, value) {
+    function setField(field, value) {
       const val = String(value || '').trim();
-      if (val && !entry[field]) entry[field] = val;
+      if (!val) return;
+      const pr = SOURCE_PRIORITY[source] ?? 0;
+      const current = entry._priority[field] ?? -Infinity;
+      if (!entry[field] || pr >= current) {
+        entry[field] = val;
+        entry._priority[field] = pr;
+      }
     }
-    setIfEmpty('firstName', info.firstName);
-    setIfEmpty('lastName', info.lastName);
-    setIfEmpty('school', info.school);
-    setIfEmpty('email', info.email);
+    setField('firstName', info.firstName);
+    setField('lastName', info.lastName);
+    setField('school', info.school);
+    setField('email', info.email);
     const normalizedGrade = signinNormalizeGradeLabel_(info.grade);
-    setIfEmpty('grade', normalizedGrade);
+    setField('grade', normalizedGrade);
     const stamp = info.lastSignIn instanceof Date && !isNaN(info.lastSignIn)
       ? info.lastSignIn
       : null;
@@ -587,7 +600,6 @@ function bootstrapKnownStudents() {
   }
 
   if (CONFIG && CONFIG.FORM) {
-    collectFormSheet(CONFIG.FORM.DATA_SHEET, 'form_2025');
     collectFormSheet(CONFIG.FORM.SUBMISSIONS_SHEET, 'form_2026');
   }
   collectAttendance();
@@ -600,6 +612,14 @@ function bootstrapKnownStudents() {
       return;
     }
     const entry = aggregates.get(id);
+    const cleanEntry = {
+      studentId: entry.studentId,
+      firstName: entry.firstName,
+      lastName: entry.lastName,
+      school: entry.school,
+      email: entry.email,
+      grade: entry.grade
+    };
     const options = {};
     if (entry.lastSignIn instanceof Date && !isNaN(entry.lastSignIn)) {
       options.timestamp = entry.lastSignIn;
@@ -607,7 +627,7 @@ function bootstrapKnownStudents() {
     } else {
       options.updateLastSignIn = false;
     }
-    const result = signinUpsertKnownStudent(entry, options);
+    const result = signinUpsertKnownStudent(cleanEntry, options);
     if (result && result.created) {
       summary.added += 1;
       knownIds.add(id);
