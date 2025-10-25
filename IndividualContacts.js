@@ -411,9 +411,26 @@ function _getRecentData_() {
 // ---- One-shot bootstrap for Individual Notes ----
 function bootstrapIndividualNotes(){
   const tz = Session.getScriptTimeZone() || 'America/Chicago';
+  let roster = [];
+  try {
+    const index = signinFetchSuggestIndex_();
+    roster = Array.isArray(index)
+      ? index.map((entry) => ({
+          id: entry.id,
+          firstName: entry.firstName,
+          lastName: entry.lastName,
+          school: entry.school,
+          grade: entry.grade,
+          label: entry.label
+        }))
+      : [];
+  } catch (err) {
+    roster = [];
+  }
   return {
     mentors: getMentors(true),
-    today: Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd')
+    today: Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'),
+    roster
   };
 }
 

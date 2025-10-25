@@ -1,0 +1,364 @@
+<script>
+(function () {
+  if (window.__OFY_groupKioskInitialized) return;
+  window.__OFY_groupKioskInitialized = true;
+
+  const App = {
+    state: {
+      session: null,
+      roster: [],
+      filtered: [],
+      selected: null,
+      activeIndex: -1
+    }
+  };
+  window.__OFY_groupKiosk = App;
+
+  function $(id) { return document.getElementById(id); }
+
+  function showStatus(message, tone) {
+    const banner = $('statusBanner');
+    if (!banner) return;
+    if (!message) {
+      banner.textContent = '';
+      banner.hidden = true;
+      banner.setAttribute('hidden', '');
+      return;
+    }
+    banner.textContent = message;
+    banner.dataset.state = tone === 'ok' ? 'ok' : tone === 'bad' ? 'bad' : 'info';
+    banner.hidden = false;
+    banner.removeAttribute('hidden');
+  }
+
+  function hideSuggestions() {
+    const list = $('studentSuggestList');
+    App.state.filtered = [];
+    App.state.activeIndex = -1;
+    if (list) {
+      list.innerHTML = '';
+      list.style.display = 'none';
+      list.setAttribute('hidden', '');
+    }
+  }
+
+  function renderSuggestions(results) {
+    const list = $('studentSuggestList');
+    if (!list) return;
+    if (!results.length) { hideSuggestions(); return; }
+    App.state.filtered = results;
+    App.state.activeIndex = -1;
+    list.innerHTML = '';
+    results.slice(0, 12).forEach((entry, index) => {
+      const li = document.createElement('li');
+      li.className = 'suggest-item';
+      const full = `${entry.firstName || ''} ${entry.lastName || ''}`.trim();
+      li.textContent = full ? `${full} (${entry.id})` : entry.id;
+      li.dataset.index = String(index);
+      li.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        chooseSuggestion(index);
+      });
+      list.appendChild(li);
+    });
+    list.style.display = 'block';
+    list.removeAttribute('hidden');
+  }
+
+  function chooseSuggestion(index) {
+    const item = App.state.filtered[index];
+    const input = $('studentSearch');
+    if (!item || !input) return;
+    App.state.selected = item;
+    input.value = `${item.firstName || ''} ${item.lastName || ''}`.trim() || item.id;
+    renderSelectedStudent();
+    hideSuggestions();
+  }
+
+  function renderSelectedStudent() {
+    const card = $('selectedStudentCard');
+    const meta = $('selectedStudentMeta');
+    const summary = $('selectedStudentSummary');
+    const button = $('signInKnownBtn');
+    if (!card || !meta || !summary || !button) return;
+    const selected = App.state.selected;
+    if (!selected) {
+      card.classList.add('muted');
+      meta.classList.add('is-empty');
+      summary.textContent = 'No student selected.';
+      Array.from(meta.querySelectorAll('.fact-value')).forEach((el) => el.textContent = '-');
+      button.disabled = true;
+      return;
+    }
+    card.classList.remove('muted');
+    meta.classList.remove('is-empty');
+    summary.textContent = `${selected.firstName || ''} ${selected.lastName || ''}`.trim() || selected.id;
+    const cells = meta.querySelectorAll('.fact-value');
+    if (cells[0]) cells[0].textContent = selected.id || '-';
+    if (cells[1]) cells[1].textContent = selected.school || '-';
+    if (cells[2]) cells[2].textContent = selected.email || '-';
+    button.disabled = false;
+  }
+
+  function filterRoster(query) {
+    const tokens = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return [];
+    return App.state.roster.filter((entry) => {
+      const haystack = [
+        entry.id,
+        entry.firstName,
+        entry.lastName,
+        `${entry.firstName || ''} ${entry.lastName || ''}`.trim(),
+        entry.school,
+        entry.email
+      ].map((part) => String(part || '').toLowerCase());
+      return tokens.every((token) => haystack.some((part) => part.indexOf(token) !== -1));
+    });
+  }
+
+  function handleSearchInput() {
+    const input = $('studentSearch');
+    if (!input) return;
+    const query = input.value;
+    if (!App.state.roster.length || query.trim().length < 2) {
+      hideSuggestions();
+      return;
+    }
+    const matches = filterRoster(query);
+    renderSuggestions(matches);
+  }
+
+  function handleSearchKeydown(event) {
+    if (!App.state.filtered.length) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      App.state.activeIndex = (App.state.activeIndex + 1) % App.state.filtered.length;
+      highlightActiveSuggestion();
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      App.state.activeIndex = App.state.activeIndex <= 0
+        ? App.state.filtered.length - 1
+        : App.state.activeIndex - 1;
+      highlightActiveSuggestion();
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      if (App.state.activeIndex < 0) App.state.activeIndex = 0;
+      chooseSuggestion(App.state.activeIndex);
+    } else if (event.key === 'Escape') {
+      hideSuggestions();
+      App.state.selected = null;
+      renderSelectedStudent();
+    }
+  }
+
+  function highlightActiveSuggestion() {
+    const list = $('studentSuggestList');
+    if (!list) return;
+    Array.from(list.children).forEach((el, idx) => el.classList.toggle('active', idx === App.state.activeIndex));
+  }
+
+  function attachSearchEvents() {
+    const input = $('studentSearch');
+    const suggestionList = $('studentSuggestList');
+    if (!input || !suggestionList) return;
+    input.addEventListener('input', handleSearchInput);
+    input.addEventListener('keydown', handleSearchKeydown);
+    document.addEventListener('click', (event) => {
+      if (!suggestionList.contains(event.target) && event.target !== input) {
+        hideSuggestions();
+      }
+    });
+  }
+
+  function openManualSheet() {
+    const sheet = $('manualSheet');
+    if (!sheet) return;
+    hideSuggestions();
+    sheet.classList.add('is-open');
+    sheet.setAttribute('aria-hidden', 'false');
+    window.setTimeout(() => {
+      const idField = $('manualId');
+      if (idField) idField.focus();
+    }, 120);
+  }
+
+  function closeManualSheet() {
+    const sheet = $('manualSheet');
+    if (!sheet) return;
+    sheet.classList.remove('is-open');
+    sheet.setAttribute('aria-hidden', 'true');
+  }
+
+  function recordKnownSignIn() {
+    const selected = App.state.selected;
+    const button = $('signInKnownBtn');
+    if (!selected || !App.state.session) {
+      showStatus('Pick your name first.', 'bad');
+      return;
+    }
+    if (button) button.disabled = true;
+    showStatus('Recording attendance…', 'info');
+    const payload = {
+      sessionId: App.state.session.id,
+      sessionRow: App.state.session.rowIndex || null,
+      student: selected
+    };
+    window.google.script.run
+      .withSuccessHandler((res) => {
+        if (!res || !res.ok) {
+          showStatus((res && res.error) || 'Sign-in failed.', 'bad');
+        } else {
+          showStatus(`Recorded attendance for ${selected.firstName || selected.lastName || selected.id}.`, 'ok');
+          App.state.selected = null;
+          const input = $('studentSearch');
+          if (input) input.value = '';
+          hideSuggestions();
+          renderSelectedStudent();
+          if (input) input.focus();
+        }
+        if (button) button.disabled = false;
+      })
+      .withFailureHandler((err) => {
+        showStatus(err && err.message ? err.message : 'Sign-in failed.', 'bad');
+        if (button) button.disabled = false;
+      })
+      .recordStudentSignIn(payload);
+  }
+
+  function recordManualSignIn(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const details = {
+      studentId: $('manualId') && $('manualId').value.trim(),
+      firstName: $('manualFirst') && $('manualFirst').value.trim(),
+      lastName : $('manualLast') && $('manualLast').value.trim(),
+      school   : $('manualSchool') && $('manualSchool').value.trim(),
+      email    : $('manualEmail') && $('manualEmail').value.trim(),
+      grade    : $('manualGrade') && $('manualGrade').value.trim()
+    };
+    if (!details.studentId || !details.firstName || !details.lastName || !details.school || !details.email) {
+      showStatus('Please complete all required fields.', 'bad');
+      return;
+    }
+    const controls = Array.from(form.elements);
+    controls.forEach((el) => { el.disabled = true; });
+    showStatus('Recording attendance…', 'info');
+    window.google.script.run
+      .withSuccessHandler((res) => {
+        if (!res || !res.ok) {
+          showStatus((res && res.error) || 'Sign-in failed.', 'bad');
+        } else {
+          showStatus('Attendance recorded.', 'ok');
+          form.reset();
+          closeManualSheet();
+        }
+        controls.forEach((el) => { el.disabled = false; });
+      })
+      .withFailureHandler((err) => {
+        showStatus(err && err.message ? err.message : 'Sign-in failed.', 'bad');
+        controls.forEach((el) => { el.disabled = false; });
+      })
+      .recordStudentSignIn({
+        sessionId: App.state.session && App.state.session.id,
+        student: details
+      });
+  }
+
+  function renderSessionSummary() {
+    const summary = $('sessionSummary');
+    if (summary && App.state.session) {
+      summary.textContent = `${App.state.session.label || '(Session)'} – ${App.state.session.date || ''}`;
+    }
+  }
+
+  function loadSessionAndRoster() {
+    const params = new URLSearchParams(window.location.search || '');
+    const sessionId = params.get('session') || '';
+    const dateParam = params.get('date') || '';
+    const today = new Date();
+    const todayYMD = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const date = dateParam || todayYMD;
+
+    const hiddenDate = $('sessionDateInput');
+    if (hiddenDate) hiddenDate.value = date;
+
+    window.google.script.run
+      .withSuccessHandler((response) => {
+        const sessions = response && Array.isArray(response.sessions) ? response.sessions : [];
+        const match = sessions.find((session) => String(session.id) === String(sessionId));
+        App.state.session = match || {
+          id: sessionId,
+          label: match ? match.label : '(Unknown session)',
+          date,
+          rowIndex: match ? match.rowIndex : null
+        };
+        renderSessionSummary();
+        window.google.script.run
+          .withSuccessHandler((roster) => {
+            App.state.roster = Array.isArray(roster)
+              ? roster.map((item) => ({
+                  id: String(item.id || '').trim(),
+                  firstName: String(item.firstName || '').trim(),
+                  lastName: String(item.lastName || '').trim(),
+                  school: String(item.school || '').trim(),
+                  email: String(item.email || '').trim(),
+                  grade: String(item.grade || '').trim()
+                }))
+              : [];
+            if (window.console && typeof console.debug === 'function') {
+              console.debug('[Roster] Loaded', App.state.roster.length);
+            }
+          })
+          .withFailureHandler(() => { App.state.roster = []; })
+          .listKnownStudentsLite();
+      })
+      .withFailureHandler((err) => {
+        showStatus(err && err.message ? err.message : 'Session lookup failed.', 'bad');
+      })
+      .listActiveSignInSessions(date);
+  }
+
+  function init() {
+    attachSearchEvents();
+    hideSuggestions();
+    renderSelectedStudent();
+
+    const manualForm = $('manualEntryForm');
+    if (manualForm) manualForm.addEventListener('submit', recordManualSignIn);
+
+    const manualCue = $('manualCue');
+    if (manualCue) {
+      manualCue.addEventListener('click', openManualSheet);
+      manualCue.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openManualSheet();
+        }
+      });
+    }
+
+    const closeBtn = $('manualClose');
+    if (closeBtn) closeBtn.addEventListener('click', closeManualSheet);
+
+    const overlay = $('manualSheet');
+    if (overlay) overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) closeManualSheet();
+    });
+
+    const knownBtn = $('signInKnownBtn');
+    if (knownBtn) knownBtn.addEventListener('click', recordKnownSignIn);
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') closeManualSheet();
+    });
+
+    loadSessionAndRoster();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>

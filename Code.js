@@ -128,7 +128,7 @@ function doGet(e) {
     : 'GroupNotes'; // change to 'Queue' if you want Queue as default
 
   // Only allow known pages; fallback if typo/unknown
-  var allowed = new Set(['GroupNotes', 'Form', 'IndividualNotes', 'Queue', 'Login']);
+  var allowed = new Set(['GroupNotes', 'Form', 'IndividualNotes', 'Queue', 'Login', 'LoginGroup', 'LoginIndividual', 'SessionAdmin']);
   if (!allowed.has(page)) page = 'GroupNotes';
 
   var titleMap = {
@@ -136,7 +136,10 @@ function doGet(e) {
     Form: 'Intake Form',
     IndividualNotes: 'Individual Notes',
     Queue: 'Sign-In Queue',
-    Login: 'Program Sign-In'
+    Login: 'Program Sign-In',
+    LoginGroup: 'Group Sign-In',
+    LoginIndividual: 'Individual Sign-In',
+    SessionAdmin: 'Session & Kiosk Links'
   };
 
   var tpl = HtmlService.createTemplateFromFile(page);

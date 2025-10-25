@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Group Sign-In</title>
+    <?!= include('StyleCore'); ?>
+    <?!= include('StyleExtended'); ?>
+  </head>
+  <body>
+    <div class="app-shell login-shell kiosk-shell">
+      <section class="hero panel">
+        <div class="hero-content">
+          <div>
+            <h1>Group Sign-In</h1>
+            <p class="desc">This iPad is locked to a specific circle. Tap your name to record attendance.</p>
+          </div>
+          <input id="sessionDateInput" type="hidden" />
+        </div>
+        <div class="status-wrap">
+          <div id="statusBanner" class="status-pill" role="status" aria-live="polite" hidden></div>
+        </div>
+      </section>
+
+      <section class="panel sign-in-panel" id="signInPanel" aria-labelledby="signInHeading">
+        <header class="section-head">
+          <div class="section-title">
+            <h2 id="signInHeading">Sign in students</h2>
+            <p id="sessionSummary" class="muted"></p>
+          </div>
+        </header>
+
+        <div class="kiosk-grid">
+          <section class="kiosk-card" aria-label="Find your name">
+            <span class="label">Search roster</span>
+            <div class="suggest-wrap">
+              <input id="studentSearch" class="kiosk-input" type="text" autocomplete="off" placeholder="Start typing your first or last name" />
+              <ul id="studentSuggestList" class="suggest-list" role="listbox" aria-label="Student matches"></ul>
+            </div>
+            <div id="selectedStudentCard" class="selection-card muted">
+              <p id="selectedStudentSummary">No student selected.</p>
+              <dl id="selectedStudentMeta" class="selected-meta is-empty">
+                <div class="selected-meta-item">
+                  <dt class="fact-label">Student ID</dt>
+                  <dd class="fact-value">-</dd>
+                </div>
+                <div class="selected-meta-item">
+                  <dt class="fact-label">School</dt>
+                  <dd class="fact-value">-</dd>
+                </div>
+                <div class="selected-meta-item">
+                  <dt class="fact-label">Email</dt>
+                  <dd class="fact-value">-</dd>
+                </div>
+              </dl>
+            </div>
+            <button id="signInKnownBtn" class="kiosk-btn kiosk-btn-primary" type="button" disabled>Record attendance</button>
+          </section>
+        </div>
+
+        <div class="kiosk-cta" id="manualCue" role="button" tabindex="0">
+          <strong>Swipe up or tap to add yourself</strong>
+          <span class="hint">No match? We'll add you to the roster instantly.</span>
+        </div>
+      </section>
+    </div>
+
+    <div id="manualSheet" class="sheet-overlay" aria-hidden="true">
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="manualHeader">
+        <div class="sheet-handle"></div>
+        <header>
+          <h2 id="manualHeader">Add yourself</h2>
+          <button type="button" class="sheet-close" id="manualClose" aria-label="Close">X</button>
+        </header>
+        <form id="manualEntryForm" class="manual-form">
+          <label class="form-field">
+            <span class="label">Student ID *</span>
+            <input id="manualId" type="text" inputmode="numeric" pattern="[0-9]*" required autocomplete="off" />
+          </label>
+          <label class="form-field">
+            <span class="label">First name *</span>
+            <input id="manualFirst" type="text" required autocomplete="off" autocapitalize="words" />
+          </label>
+          <label class="form-field">
+            <span class="label">Last name *</span>
+            <input id="manualLast" type="text" required autocomplete="off" autocapitalize="words" />
+          </label>
+          <label class="form-field">
+            <span class="label">School *</span>
+            <input id="manualSchool" type="text" required autocomplete="off" />
+          </label>
+          <label class="form-field">
+            <span class="label">Email *</span>
+            <input id="manualEmail" type="email" required autocomplete="off" />
+          </label>
+          <label class="form-field">
+            <span class="label">Grade</span>
+            <select id="manualGrade">
+              <option value="">Select grade</option>
+              <option value="Freshman">Freshman</option>
+              <option value="Sophomore">Sophomore</option>
+              <option value="Junior">Junior</option>
+              <option value="Senior">Senior</option>
+            </select>
+          </label>
+          <button class="kiosk-btn kiosk-btn-primary" type="submit">Add &amp; record attendance</button>
+        </form>
+      </div>
+    </div>
+
+    <?!= include('ClientUtils'); ?>
+    <?!= include('Suggest'); ?>
+    <?!= include('LoginGroupScript'); ?>
+  </body>
+  </html>
+
+

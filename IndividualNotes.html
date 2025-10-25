@@ -7,7 +7,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Individual Notes</title>
-    <?!= include('Style'); ?>
+    <?!= include('StyleCore'); ?>
+    <?!= include('StyleExtended'); ?>
   </head>
   <body>
     <div class="app-shell">
@@ -51,43 +52,51 @@
       </section>
 
       <div class="layout-stack">
-        <section class="panel form-panel">
-          <header class="section-head">
-            <div class="section-title">
-              <h2>Participants</h2>
-              <p>Search by name or ID, or paste from the queue tray.</p>
+        <div class="indiv-grid">
+          <section class="panel form-panel panel-accent">
+            <header class="section-head">
+              <div class="section-title">
+                <h2>Participants</h2>
+                <p>Search by name or ID, or paste from the queue tray.</p>
+              </div>
+              <div class="section-actions"></div>
+            </header>
+            <div class="participant-picker">
+              <div class="chips-row">
+                <div id="studentChips" class="chips chips-elevated"></div>
+                <div class="chips-summary muted" id="whoLine"></div>
+              </div>
+              <div class="suggest-wrap input-elevated">
+                <input id="studentInput" type="text" placeholder="Search by student name or ID…" autocomplete="off" />
+                <select id="studentSuggest" class="suggest-select" size="4" hidden></select>
+              </div>
             </div>
-          </header>
-          <div class="participant-picker">
-            <div id="studentChips" class="chips"></div>
-            <div class="suggest-wrap">
-              <input id="studentInput" type="text" placeholder="Type 3+ characters (name or ID)…" autocomplete="off" />
-              <ul id="studentSuggest" class="suggest-menu"></ul>
-            </div>
-            <div class="participant-manual">
-              <input id="manualId" type="text" placeholder="Add by ID (e.g., 123456789)" />
-              <button id="addIdBtn" type="button" class="btn btn-ghost">Add ID</button>
-            </div>
-            <span class="muted selection-count" id="whoLine"></span>
-          </div>
-        </section>
+          </section>
 
-        <section class="panel form-panel">
-          <header class="section-head">
-            <div class="section-title">
-              <h2>Contact details</h2>
-              <p>Core fields that sync to the individual contact tracker.</p>
+          <section class="panel form-panel panel-lined">
+            <header class="section-head">
+              <div class="section-title">
+                <h2>Contact details</h2>
+                <p>Core fields that sync to the individual contact tracker.</p>
+              </div>
+              <div class="section-actions">
+                <button id="clearBtnSecondary" type="button" class="btn btn-ghost btn-small">Reset</button>
+              </div>
+            </header>
+            <div id="indivForm" class="form-grid"></div>
+            <div class="form-notes">
+              <label for="notes">Notes</label>
+              <textarea id="notes" rows="4" placeholder="Concise narrative (include wins or follow-ups)…"></textarea>
             </div>
-          </header>
-          <div id="indivForm" class="form-grid"></div>
-          <div class="form-notes">
-            <label for="notes">Notes</label>
-            <textarea id="notes" rows="4" placeholder="Concise narrative (include wins or follow-ups)…"></textarea>
-          </div>
-          <div class="form-actions">
-            <button id="saveBtn" type="button" class="btn btn-primary">Save contact</button>
-          </div>
-        </section>
+            <div class="form-actions">
+              <div class="action-hint muted">Saving adds the note to each selected student’s record.</div>
+              <button id="saveBtn" type="button" class="btn btn-primary btn-large">
+                <span class="btn-icon-glyph" aria-hidden="true">✔</span>
+                Save contact
+              </button>
+            </div>
+          </section>
+        </div>
 
         <section class="panel recent-panel">
           <header class="section-head">

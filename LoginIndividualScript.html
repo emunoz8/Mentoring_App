@@ -1,0 +1,465 @@
+<script>
+(() => {
+  if (window.__OFY_individualKioskInitialized) return;
+  window.__OFY_individualKioskInitialized = true;
+
+  const $ = (id) => document.getElementById(id);
+  const utils = window.ClientUtils || {};
+  const todayYMD = typeof utils.todayYMD === 'function'
+    ? utils.todayYMD
+    : (() => {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      });
+  const call = typeof utils.call === 'function'
+    ? utils.call
+    : (method, args = []) => {
+        const runner = (window.google && google.script && google.script.run) || null;
+        if (!runner || typeof runner[method] !== 'function') {
+          return Promise.reject(new Error('Apps Script unavailable'));
+        }
+        const argArray = Array.isArray(args) ? args : [args];
+        return new Promise((resolve, reject) => {
+          runner.withSuccessHandler(resolve).withFailureHandler(reject)[method].apply(runner, argArray);
+        });
+      };
+  const setStatus = typeof utils.createStatusSetter === 'function'
+    ? utils.createStatusSetter('statusBanner', { hideWhenEmpty: true })
+    : ((message, tone) => {
+        const el = $('statusBanner');
+        if (!el) return;
+        if (!message) {
+          el.textContent = '';
+          el.hidden = true;
+          el.setAttribute('hidden', '');
+          return;
+        }
+        const state = tone === 'bad' ? 'bad' : tone === 'ok' ? 'ok' : 'info';
+        el.textContent = message;
+        el.dataset.state = state;
+        el.hidden = false;
+        el.removeAttribute('hidden');
+      });
+
+  const state = {
+    mentorId: '',
+    selected: null,
+    mentors: [],
+    roster: [],
+    filtered: [],
+    activeIndex: -1
+  };
+  let touchStartY = null;
+  let statusTimer = null;
+
+  const searchInput = $('studentSearch');
+  const suggestList = $('studentSuggestList');
+
+  function showStatus(message, tone = 'info', autoClear = false) {
+    clearTimeout(statusTimer);
+    setStatus(message, tone);
+    if (autoClear) {
+      statusTimer = setTimeout(() => setStatus('', 'info'), 3000);
+    }
+  }
+
+  function openManualSheet() {
+    const sheet = $('manualSheet');
+    if (!sheet) return;
+    hideSuggestions();
+    sheet.classList.add('is-open');
+    sheet.setAttribute('aria-hidden', 'false');
+    setTimeout(() => $('manualId')?.focus(), 120);
+  }
+
+  function closeManualSheet() {
+    const sheet = $('manualSheet');
+    if (!sheet) return;
+    sheet.classList.remove('is-open');
+    sheet.setAttribute('aria-hidden', 'true');
+  }
+
+  function getQS() {
+    return new Promise((resolve) => {
+      const api = window.google && google.script && google.script.url;
+      if (!api) {
+        const params = new URLSearchParams(window.location.search || '');
+        resolve({
+          mentorId: (params.get('mentorId') || params.get('mentor') || '').trim().toUpperCase(),
+          date: (params.get('date') || '').trim()
+        });
+        return;
+      }
+      api.getLocation((loc) => {
+        const param = (loc && loc.parameter) || {};
+        resolve({
+          mentorId: String(param.mentorId || param.mentor || '').trim().toUpperCase(),
+          date: String(param.date || '').trim()
+        });
+      });
+    });
+  }
+
+  function renderSummary() {
+    const summary = $('sessionSummary');
+    if (!summary) return;
+    const { mentorId } = resolveMentor();
+    if (!mentorId) {
+      summary.textContent = 'Select a mentor before signing in.';
+      return;
+    }
+    const match = (state.mentors || []).find((m) => String(m.id || '').toUpperCase() === mentorId);
+    summary.textContent = match ? `Mentor: ${match.name || mentorId}` : `Mentor ID: ${mentorId}`;
+  }
+
+  function populateMentorsDropdown() {
+    const select = $('mentorSelect');
+    if (!select) return;
+    select.innerHTML = '';
+    const options = [{ value: '', label: '-- Select mentor --' }]
+      .concat((state.mentors || []).map((m) => ({
+        value: String(m.id || '').toUpperCase(),
+        label: m.name || String(m.id || '')
+      })));
+    options.forEach((opt) => {
+      const option = document.createElement('option');
+      option.value = opt.value;
+      option.textContent = opt.label;
+      select.appendChild(option);
+    });
+    if (state.mentorId) {
+      select.value = state.mentorId;
+      select.disabled = true;
+    }
+    renderSummary();
+  }
+
+  function renderSelected() {
+    const meta = $('selectedStudentMeta');
+    const summary = $('selectedStudentSummary');
+    const btn = $('signInKnownBtn');
+    if (!meta || !summary || !btn) return;
+    const student = state.selected;
+    if (!student) {
+      summary.textContent = 'No student selected.';
+      meta.classList.add('is-empty');
+      meta.querySelectorAll('.fact-value').forEach((el) => { el.textContent = '-'; });
+      btn.disabled = true;
+      return;
+    }
+    const display = `${student.firstName || ''} ${student.lastName || ''}`.trim() || student.id;
+    summary.textContent = display;
+    meta.classList.remove('is-empty');
+    const values = meta.querySelectorAll('.fact-value');
+    if (values[0]) values[0].textContent = student.id || '-';
+    if (values[1]) values[1].textContent = student.school || '-';
+    if (values[2]) values[2].textContent = student.email || '-';
+    btn.disabled = false;
+  }
+
+  function clearSelectedStudent() {
+    state.selected = null;
+    renderSelected();
+  }
+
+  function hideSuggestions() {
+    state.filtered = [];
+    state.activeIndex = -1;
+    if (suggestList) {
+      suggestList.innerHTML = '';
+      suggestList.style.display = 'none';
+    }
+  }
+
+  function highlightSuggestion() {
+    if (!suggestList) return;
+    Array.from(suggestList.children).forEach((el, idx) => {
+      el.classList.toggle('active', idx === state.activeIndex);
+    });
+  }
+
+  function chooseSuggestion(index) {
+    const item = state.filtered[index];
+    if (!item) return;
+    searchInput.value = `${item.firstName || ''} ${item.lastName || ''}`.trim() || item.id;
+    state.selected = item;
+    hideSuggestions();
+    renderSelected();
+  }
+
+  function filterRoster(query) {
+    const tokens = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return [];
+    const results = [];
+    state.roster.forEach((item) => {
+      const haystack = [
+        item.id,
+        item.firstName,
+        item.lastName,
+        `${item.firstName || ''} ${item.lastName || ''}`.trim(),
+        item.school,
+        item.email
+      ].map((part) => String(part || '').toLowerCase());
+      const matches = tokens.every((token) => haystack.some((part) => part.includes(token)));
+      if (matches) results.push(item);
+    });
+    return results.slice(0, 12);
+  }
+
+  function renderSuggestions(list) {
+    if (!suggestList) return;
+    if (!list.length) {
+      hideSuggestions();
+      return;
+    }
+    state.filtered = list;
+    state.activeIndex = -1;
+    suggestList.innerHTML = '';
+    list.forEach((item, idx) => {
+      const li = document.createElement('li');
+      li.className = 'suggest-item';
+      const full = `${item.firstName || ''} ${item.lastName || ''}`.trim();
+      li.textContent = full ? `${full} (${item.id})` : item.id;
+      li.dataset.index = String(idx);
+      li.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        chooseSuggestion(idx);
+      });
+      suggestList.appendChild(li);
+    });
+    suggestList.style.display = 'block';
+  }
+
+  function handleSearchInput() {
+    const query = searchInput.value;
+    if (query.trim().length < 2) {
+      hideSuggestions();
+      return;
+    }
+    const matches = filterRoster(query);
+    renderSuggestions(matches);
+  }
+
+  function handleSearchKeydown(e) {
+    if (!state.filtered.length) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      state.activeIndex = (state.activeIndex + 1) % state.filtered.length;
+      highlightSuggestion();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      state.activeIndex = state.activeIndex <= 0
+        ? state.filtered.length - 1
+        : state.activeIndex - 1;
+      highlightSuggestion();
+    } else if (e.key === 'Enter') {
+      if (state.activeIndex < 0) state.activeIndex = 0;
+      const item = state.filtered[state.activeIndex];
+      if (item) {
+        e.preventDefault();
+        chooseSuggestion(state.activeIndex);
+      }
+    } else if (e.key === 'Escape') {
+      hideSuggestions();
+      clearSelectedStudent();
+    }
+  }
+
+  function attachSearchHandlers() {
+    if (!searchInput) return;
+    searchInput.addEventListener('input', handleSearchInput);
+    searchInput.addEventListener('keydown', handleSearchKeydown);
+    document.addEventListener('click', (e) => {
+      if (!suggestList) return;
+      if (!suggestList.contains(e.target) && e.target !== searchInput) {
+        hideSuggestions();
+      }
+    });
+  }
+
+  function resolveMentor() {
+    const select = $('mentorSelect');
+    const mentorId = (state.mentorId || (select && select.value) || '').trim().toUpperCase();
+    const match = (state.mentors || []).find((m) => String(m.id || '').toUpperCase() === mentorId);
+    const mentorName = match && match.name ? match.name : '';
+    return { mentorId, mentorName };
+  }
+
+  function signIn(details) {
+    const { mentorId, mentorName } = resolveMentor();
+    if (!mentorId) {
+      showStatus('Select a mentor before signing in.', 'bad');
+      return Promise.resolve(false);
+    }
+    clearTimeout(statusTimer);
+    showStatus('Signing in...', 'info');
+    return call('recordIndividualKioskSignIn', [details, mentorId, mentorName])
+      .then((res) => {
+        if (!res || !res.ok) {
+          showStatus((res && res.error) || 'Sign-in failed.', 'bad');
+          return false;
+        }
+        const display = details.firstName || details.lastName
+          ? `${details.firstName || ''} ${details.lastName || ''}`.trim()
+          : (details.studentId || details.id || 'student');
+        showStatus(`Signed in ${display}.`, 'ok', true);
+        clearSelectedStudent();
+        searchInput.value = '';
+        hideSuggestions();
+        searchInput.focus();
+        return true;
+      })
+      .catch((err) => {
+        showStatus(err && err.message ? err.message : 'Sign-in failed.', 'bad');
+        return false;
+      });
+  }
+
+  function wireEvents() {
+    $('signInKnownBtn')?.addEventListener('click', () => {
+      const s = state.selected;
+      if (!s) {
+        showStatus('Pick your name first.', 'bad');
+        return;
+      }
+      const details = {
+        id: s.id,
+        studentId: s.id,
+        firstName: s.firstName || '',
+        lastName: s.lastName || '',
+        school: s.school || '',
+        email: s.email || '',
+        grade: s.grade || ''
+      };
+      const btn = $('signInKnownBtn');
+      if (btn) btn.disabled = true;
+      signIn(details).finally(() => { if (btn) btn.disabled = false; });
+    });
+
+    $('mentorSelect')?.addEventListener('change', () => {
+      if (!state.mentorId) renderSummary();
+    });
+
+    $('manualEntryForm')?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const form = e.currentTarget;
+      const details = {
+        studentId: $('manualId')?.value.trim(),
+        firstName: $('manualFirst')?.value.trim(),
+        lastName: $('manualLast')?.value.trim(),
+        school: $('manualSchool')?.value.trim(),
+        email: $('manualEmail')?.value.trim(),
+        grade: $('manualGrade')?.value.trim()
+      };
+      if (!details.studentId || !details.firstName || !details.lastName || !details.school || !details.email) {
+        showStatus('Please complete all required fields.', 'bad');
+        return;
+      }
+      const controls = Array.from(form.elements);
+      controls.forEach((el) => el.disabled = true);
+      signIn(details).then((ok) => {
+        if (ok) {
+          form.reset();
+          closeManualSheet();
+        }
+        controls.forEach((el) => el.disabled = false);
+      });
+    });
+
+    $('manualCue')?.addEventListener('click', openManualSheet);
+    $('manualCue')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openManualSheet();
+      }
+    });
+    $('manualClose')?.addEventListener('click', closeManualSheet);
+    $('manualSheet')?.addEventListener('click', (e) => {
+      if (e.target === $('manualSheet')) closeManualSheet();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeManualSheet();
+    });
+  }
+
+  function wireSwipeForSheet() {
+    window.addEventListener('touchstart', (e) => {
+      if (e.touches && e.touches.length === 1) {
+        touchStartY = e.touches[0].clientY;
+      }
+    }, { passive: true });
+
+    window.addEventListener('touchend', (e) => {
+      if (touchStartY == null) return;
+      const touch = e.changedTouches && e.changedTouches.length ? e.changedTouches[0] : null;
+      const endY = touch ? touch.clientY : touchStartY;
+      const delta = touchStartY - endY;
+      if (touchStartY > window.innerHeight - 140 && delta > 80) {
+        openManualSheet();
+      }
+      touchStartY = null;
+    }, { passive: true });
+  }
+
+  function syncDateInput(date) {
+    const hiddenDate = $('sessionDateInput');
+    if (hiddenDate) hiddenDate.value = date || todayYMD();
+  }
+
+  async function loadMentors() {
+    try {
+      const list = await call('getMentors', [true]).catch(() => []);
+      state.mentors = Array.isArray(list) ? list.map((m) => ({
+        id: String(m.id || '').trim().toUpperCase(),
+        name: String(m.name || '').trim()
+      })) : [];
+      populateMentorsDropdown();
+    } catch (_) {
+      state.mentors = [];
+      populateMentorsDropdown();
+    }
+  }
+
+  async function loadRoster() {
+    try {
+      const list = await call('listKnownStudentsLite', []);
+      state.roster = Array.isArray(list) ? list.map((item) => ({
+        id: String(item.id || '').trim(),
+        firstName: String(item.firstName || '').trim(),
+        lastName: String(item.lastName || '').trim(),
+        school: String(item.school || '').trim(),
+        email: String(item.email || '').trim(),
+        grade: String(item.grade || '').trim()
+      })) : [];
+    } catch (_) {
+      state.roster = [];
+    }
+  }
+
+  async function init() {
+    try {
+      const qs = await getQS();
+      state.mentorId = qs.mentorId || '';
+      const date = qs.date || todayYMD();
+      syncDateInput(date);
+      await loadMentors();
+      renderSummary();
+      await loadRoster();
+      attachSearchHandlers();
+      wireEvents();
+      wireSwipeForSheet();
+      renderSelected();
+      searchInput?.focus();
+    } catch (e) {
+      showStatus('Load error: ' + (e && e.message ? e.message : String(e)), 'bad');
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
+

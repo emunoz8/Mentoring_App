@@ -1,0 +1,227 @@
+<script>
+(() => {
+  if (window.__OFY_sessionAdminInitialized) return;
+  window.__OFY_sessionAdminInitialized = true;
+
+  const byId = (id) => document.getElementById(id);
+  const utils = window.ClientUtils || {};
+  const todayYMD = typeof utils.todayYMD === 'function'
+    ? utils.todayYMD
+    : (() => {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      });
+
+  const statusPill = byId('adminStatus');
+  const startForm = byId('startSessionForm');
+  const startDateInput = byId('startDateInput');
+  const labelSelect = byId('sessionLabelSelect');
+  const startBtn = byId('startSessionBtn');
+  const sessionsDateInput = byId('sessionsDateInput');
+  const sessionsList = byId('sessionsList');
+  const sessionsEmpty = byId('sessionsEmpty');
+
+  let statusTimer = null;
+  let BASE_URL = '';
+
+  function getRunner() {
+    return window.google?.script?.run || null;
+  }
+
+  function call(method, ...args) {
+    const runner = getRunner();
+    if (!runner || typeof runner[method] !== 'function') {
+      return Promise.reject(new Error('Apps Script unavailable'));
+    }
+    return new Promise((resolve, reject) => {
+      runner.withSuccessHandler(resolve).withFailureHandler(reject)[method](...args);
+    });
+  }
+
+  function showStatus(message, tone = 'info', autoClear = false) {
+    clearTimeout(statusTimer);
+    if (!statusPill) return;
+    if (!message) {
+      statusPill.textContent = '';
+      statusPill.hidden = true;
+      statusPill.setAttribute('hidden', '');
+      return;
+    }
+    const state = tone === 'bad' ? 'bad' : tone === 'ok' ? 'ok' : 'info';
+    statusPill.textContent = message;
+    statusPill.dataset.state = state;
+    statusPill.hidden = false;
+    statusPill.removeAttribute('hidden');
+    if (autoClear) statusTimer = setTimeout(() => showStatus('', 'info'), 2200);
+  }
+
+  function buildGroupLink(sessionId, date) {
+    const params = new URLSearchParams({ page: 'LoginGroup', session: sessionId, date });
+    return `${BASE_URL}?${params.toString()}`;
+  }
+
+  async function initBaseUrl() {
+    try {
+      const url = await call('getWebAppBaseUrl');
+      BASE_URL = url || (location.origin + location.pathname);
+    } catch (_) {
+      BASE_URL = location.origin + location.pathname;
+    }
+  }
+
+  function renderSessions(items) {
+    if (!sessionsList) return;
+    sessionsList.innerHTML = '';
+    if (!Array.isArray(items) || !items.length) {
+      if (sessionsEmpty) sessionsEmpty.hidden = false;
+      return;
+    }
+    if (sessionsEmpty) sessionsEmpty.hidden = true;
+
+    items.forEach((session) => {
+      const card = document.createElement('div');
+      card.className = 'admin-card';
+
+      const head = document.createElement('div');
+      head.className = 'admin-card-head';
+      const title = document.createElement('h3');
+      title.textContent = session.label || '(No label)';
+      const tag = document.createElement('span');
+      tag.className = 'admin-pill';
+      tag.textContent = 'Group';
+      head.appendChild(title);
+      head.appendChild(tag);
+      card.appendChild(head);
+
+      const meta = document.createElement('p');
+      meta.className = 'muted';
+      meta.textContent = `${session.date} - Circle sign-in`;
+      card.appendChild(meta);
+
+      const linkRow = document.createElement('div');
+      linkRow.className = 'link-row';
+
+      const openBtn = document.createElement('button');
+      openBtn.type = 'button';
+      openBtn.className = 'btn btn-primary';
+      openBtn.textContent = 'Open kiosk';
+      openBtn.addEventListener('click', () => {
+        const url = buildGroupLink(session.id, session.date);
+        window.open(url, '_blank');
+      });
+      linkRow.appendChild(openBtn);
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'btn btn-ghost';
+      copyBtn.textContent = 'Copy link';
+      copyBtn.addEventListener('click', async () => {
+        const url = buildGroupLink(session.id, session.date);
+        try {
+          await navigator.clipboard.writeText(url);
+          showStatus('Kiosk link copied.', 'ok', true);
+        } catch (err) {
+          showStatus('Copy failed. Try again.', 'bad');
+        }
+      });
+      linkRow.appendChild(copyBtn);
+
+      const endBtn = document.createElement('button');
+      endBtn.type = 'button';
+      endBtn.className = 'btn btn-ghost';
+      endBtn.textContent = 'End session';
+      endBtn.addEventListener('click', () => endSession(session.id));
+      linkRow.appendChild(endBtn);
+
+      card.appendChild(linkRow);
+      sessionsList.appendChild(card);
+    });
+  }
+
+  async function loadSessions(date) {
+    try {
+      const res = await call('listActiveSignInSessions', date);
+      const list = res && Array.isArray(res.sessions) ? res.sessions : [];
+      const filtered = list.filter((session) => String(session.type || '').toLowerCase() === 'group');
+      renderSessions(filtered);
+    } catch (e) {
+      showStatus('Failed to load sessions: ' + (e && e.message ? e.message : e), 'bad');
+      renderSessions([]);
+    }
+  }
+
+  async function endSession(sessionId) {
+    try {
+      const res = await call('endSignInSession', sessionId);
+      if (!res || !res.ok) {
+        showStatus((res && res.error) || 'Could not end session.', 'bad');
+        return;
+      }
+      showStatus('Session ended.', 'ok', true);
+      await loadSessions((sessionsDateInput && sessionsDateInput.value) || todayYMD());
+    } catch (e) {
+      showStatus(e && e.message ? e.message : 'Could not end session.', 'bad');
+    }
+  }
+
+  function wireForm() {
+    if (!startForm) return;
+    startForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const date = todayYMD();
+      if (startDateInput) startDateInput.value = date;
+      const label = String(labelSelect?.value || '').trim();
+      if (!label) {
+        showStatus('Select a circle before starting.', 'bad');
+        labelSelect?.focus();
+        return;
+      }
+      if (startBtn) startBtn.disabled = true;
+      showStatus('Creating session...', 'info');
+      try {
+        const res = await call('startSignInSession', label, date, 'group');
+        if (!res || !res.ok) {
+          showStatus((res && res.error) || 'Unable to start session.', 'bad');
+          return;
+        }
+        showStatus('Session ready.', 'ok', true);
+        if (labelSelect) labelSelect.value = '';
+        await loadSessions((sessionsDateInput && sessionsDateInput.value) || date);
+      } catch (err) {
+        showStatus(err && err.message ? err.message : 'Unable to start session.', 'bad');
+      } finally {
+        if (startBtn) startBtn.disabled = false;
+      }
+    });
+  }
+
+  function wireDateFilters() {
+    const today = todayYMD();
+    if (startDateInput) startDateInput.value = today;
+    if (sessionsDateInput) {
+      sessionsDateInput.value = today;
+      sessionsDateInput.addEventListener('change', () => {
+        const date = sessionsDateInput.value || today;
+        loadSessions(date);
+      });
+    }
+  }
+
+  async function init() {
+    try {
+      await initBaseUrl();
+      wireDateFilters();
+      wireForm();
+      await loadSessions((sessionsDateInput && sessionsDateInput.value) || todayYMD());
+    } catch (e) {
+      showStatus('Load error: ' + (e && e.message ? e.message : String(e)), 'bad');
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>

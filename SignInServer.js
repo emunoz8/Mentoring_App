@@ -8,6 +8,8 @@
 
 const SIGNIN_KNOWN = { SHEET: 'known_students' };
 const SIGNIN_SESSIONS = { SHEET: 'sign_in_sessions' };
+const SIGNIN_SUGGEST_CACHE = globalThis.SIGNIN_SUGGEST_CACHE || (globalThis.SIGNIN_SUGGEST_CACHE = { entries: null, expires: 0 });
+const SIGNIN_SUGGEST_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 function signinNorm_(value) {
   if (typeof _norm_ === 'function') return _norm_(value);
@@ -157,6 +159,8 @@ function signinInvalidateKnownCache_() {
   try {
     CacheService.getScriptCache().remove(signinKnownCacheKey_());
   } catch (_) {}
+  SIGNIN_SUGGEST_CACHE.entries = null;
+  SIGNIN_SUGGEST_CACHE.expires = 0;
 }
 
 function signinFetchKnownStudents_() {
@@ -193,6 +197,102 @@ function signinFetchKnownStudents_() {
 
   try { cache.put(key, JSON.stringify(list), 300); } catch (_) {}
   return list;
+}
+
+function signinFetchSuggestIndex_() {
+  const now = Date.now();
+  if (SIGNIN_SUGGEST_CACHE.entries && SIGNIN_SUGGEST_CACHE.expires > now) {
+    return SIGNIN_SUGGEST_CACHE.entries;
+  }
+
+  const combined = new Map();
+  function ensureRecord(idRaw) {
+    const id = String(idRaw || '').trim();
+    if (!id) return null;
+    let rec = combined.get(id);
+    if (!rec) {
+      rec = { id, firstName: '', lastName: '', school: '', email: '', grade: '', source: '' };
+      combined.set(id, rec);
+    }
+    return rec;
+  }
+  function mergeInto(id, patch) {
+    const rec = ensureRecord(id);
+    if (!rec) return;
+    if (patch.firstName && !rec.firstName) rec.firstName = patch.firstName;
+    if (patch.lastName && !rec.lastName) rec.lastName = patch.lastName;
+    if (patch.school && !rec.school) rec.school = patch.school;
+    if (patch.email && !rec.email) rec.email = patch.email;
+    if (patch.grade && !rec.grade) rec.grade = signinNormalizeGradeLabel_(patch.grade);
+    if (patch.source) {
+      // Prefer marking as known if either source is known
+      if (rec.source !== 'known' || patch.source === 'known') rec.source = patch.source;
+    }
+  }
+
+  const known = signinFetchKnownStudents_();
+  known.forEach((rec) => {
+    mergeInto(rec.id, {
+      firstName: String(rec.firstName || '').trim(),
+      lastName : String(rec.lastName || '').trim(),
+      school   : String(rec.school || '').trim(),
+      email    : String(rec.email || '').trim(),
+      grade    : String(rec.grade || '').trim(),
+      source   : 'known'
+    });
+  });
+
+  const rosterList = (typeof _getSuggestRoster_ === 'function') ? _getSuggestRoster_() : [];
+  rosterList.forEach((item) => {
+    mergeInto(item && item.id, {
+      firstName: String(item && item.firstName || '').trim(),
+      lastName : String(item && item.lastName  || '').trim(),
+      school   : String(item && item.school   || '').trim(),
+      grade    : String(item && item.grade    || '').trim(),
+      source   : 'roster'
+    });
+  });
+
+  const entries = Array.from(combined.values()).map((rec) => {
+    const first = String(rec.firstName || '').trim();
+    const last  = String(rec.lastName  || '').trim();
+    const full  = `${first} ${last}`.trim();
+    const school = String(rec.school || '').trim();
+    const grade  = signinNormalizeGradeLabel_(rec.grade);
+    const email  = String(rec.email || '').trim();
+    const labelParts = [];
+    if (full) labelParts.push(full);
+    if (rec.id) labelParts.push(rec.id);
+    const metaParts = [school, grade].filter(Boolean);
+    const label = labelParts.length
+      ? `${labelParts.join(' · ')}${metaParts.length ? ' (' + metaParts.join(' • ') + ')' : ''}`
+      : rec.id;
+    const searchFields = [
+      rec.id,
+      first,
+      last,
+      full,
+      school,
+      email,
+      grade
+    ].map((part) => signinNorm_(part));
+    return {
+      id: rec.id,
+      firstName: first,
+      lastName: last,
+      school,
+      email,
+      grade,
+      source: rec.source || '',
+      label: label || rec.id || '',
+      _searchFields: searchFields,
+      _fullName: full
+    };
+  });
+
+  SIGNIN_SUGGEST_CACHE.entries = entries;
+  SIGNIN_SUGGEST_CACHE.expires = now + SIGNIN_SUGGEST_CACHE_TTL_MS;
+  return entries;
 }
 
 function signinUpsertKnownStudent(student, options = {}) {
@@ -275,14 +375,22 @@ function signinHydrateSessionRow_(C, row, rowIndex) {
   };
 }
 
-function signinFindSession_(sessionId) {
+function signinFindSessionWithContext_(sessionId, sh, C, hintRow) {
   const id = String(sessionId || '').trim();
   if (!id) return null;
-  const { sh, C } = signinEnsureSessionsSheet_();
   const lastRow = sh.getLastRow();
   if (lastRow < 2) return null;
 
   const width = Math.max(1, sh.getLastColumn());
+  const hint = Number(hintRow);
+  if (Number.isFinite(hint) && hint >= 2 && hint <= lastRow) {
+    const rowValues = sh.getRange(hint, 1, 1, width).getValues();
+    if (rowValues && rowValues.length) {
+      const info = signinHydrateSessionRow_(C, rowValues[0], hint);
+      if (info && info.id === id) return info;
+    }
+  }
+
   const data = sh.getRange(2, 1, lastRow - 1, width).getValues();
   for (let i = 0; i < data.length; i++) {
     const row = data[i];
@@ -292,6 +400,11 @@ function signinFindSession_(sessionId) {
     }
   }
   return null;
+}
+
+function signinFindSession_(sessionId, hintRow) {
+  const { sh, C } = signinEnsureSessionsSheet_();
+  return signinFindSessionWithContext_(sessionId, sh, C, hintRow);
 }
 
 function listActiveSignInSessions(dateRaw) {
@@ -702,87 +815,46 @@ function signInSuggestPeople(query, limit) {
   const norm = signinNorm_;
   const tokens = raw.split(/\s+/).map(norm).filter(Boolean);
   if (!tokens.length) return [];
+  const n = Math.max(1, Math.min(Number(limit) || 10, 20));
+  const index = signinFetchSuggestIndex_();
+  if (!Array.isArray(index) || !index.length) return [];
 
-  const known = signinFetchKnownStudents_();
-  const rosterList = (typeof _getSuggestRoster_ === 'function') ? _getSuggestRoster_() : [];
-  const combined = new Map();
-
-  known.forEach(rec => {
-    if (!rec.id) return;
-    combined.set(rec.id, {
-      id: rec.id,
-      firstName: rec.firstName,
-      lastName: rec.lastName,
-      school: rec.school,
-      email: rec.email,
-      grade: signinNormalizeGradeLabel_(rec.grade),
-      source: 'known'
-    });
-  });
-
-  rosterList.forEach(item => {
-    const id = String(item.id || '').trim();
-    if (!id) return;
-    if (combined.has(id)) {
-      const tgt = combined.get(id);
-      if (!tgt.firstName && item.firstName) tgt.firstName = item.firstName;
-      if (!tgt.lastName && item.lastName) tgt.lastName = item.lastName;
-      if (!tgt.school && item.school) tgt.school = item.school;
-      if (!tgt.grade && item.grade) tgt.grade = signinNormalizeGradeLabel_(item.grade);
-      return;
-    }
-    combined.set(id, {
-      id,
-      firstName: String(item.firstName || '').trim(),
-      lastName: String(item.lastName || '').trim(),
-      school: String(item.school || '').trim(),
-      email: '',
-      grade: signinNormalizeGradeLabel_(item.grade),
-      source: 'roster'
-    });
-  });
-
-  const entries = Array.from(combined.values()).map(entry => {
-    const full = `${entry.firstName || ''} ${entry.lastName || ''}`.trim();
-    const normFields = [
-      norm(entry.id),
-      norm(entry.firstName),
-      norm(entry.lastName),
-      norm(full),
-      norm(entry.school),
-      norm(entry.email),
-      norm(entry.grade)
-    ];
+  const scored = [];
+  index.forEach((entry) => {
+    const fields = entry._searchFields || [];
     let score = 0;
-    tokens.forEach(tok => {
-      normFields.forEach(field => {
+    tokens.forEach((tok) => {
+      fields.forEach((field) => {
         if (!tok || !field) return;
         if (field === tok) score += 6;
         else if (field.startsWith(tok)) score += 4;
-        else if (field.includes(tok)) score += 2;
+        else if (field.indexOf(tok) !== -1) score += 2;
       });
     });
-    const labelParts = [];
-    if (full) labelParts.push(full);
-    if (entry.id) labelParts.push(entry.id);
-    const meta = [entry.school, entry.grade].map(x => String(x || '').trim()).filter(Boolean);
-    const label = labelParts.length
-      ? `${labelParts.join(' · ')}${meta.length ? ' (' + meta.join(' • ') + ')' : ''}`
-      : entry.id;
-    return Object.assign({}, entry, {
-      fullName: full,
-      label,
-      score
-    });
-  }).filter(item => item.score > 0);
-
-  entries.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    return (a.fullName || '').localeCompare(b.fullName || '') || a.id.localeCompare(b.id);
+    if (score > 0) {
+      scored.push({ entry, score });
+    }
   });
 
-  const n = Math.max(1, Math.min(Number(limit) || 10, 20));
-  return entries.slice(0, n).map(({ score, fullName, ...rest }) => rest);
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const nameA = a.entry._fullName || '';
+    const nameB = b.entry._fullName || '';
+    const cmp = nameA.localeCompare(nameB);
+    if (cmp !== 0) return cmp;
+    return (a.entry.id || '').localeCompare(b.entry.id || '');
+  });
+
+  return scored.slice(0, n).map(({ entry }) => ({
+    id: entry.id,
+    firstName: entry.firstName,
+    lastName: entry.lastName,
+    school: entry.school,
+    email: entry.email,
+    grade: entry.grade,
+    source: entry.source,
+    label: entry.label
+  }));
 }
 
 function signinRecordGroupAttendance_(session, details, timestamp) {
@@ -810,43 +882,50 @@ function signinRecordGroupAttendance_(session, details, timestamp) {
 
 function recordStudentSignIn(payload) {
   const sessionId = payload && payload.sessionId;
+  const mentorIdOpt = payload && payload.mentorId ? String(payload.mentorId).trim() : '';
   const student = payload && payload.student;
+  const sessionRowHint = payload && payload.sessionRow;
   if (!sessionId) return { ok: false, error: 'Session ID is required.' };
   if (!student) return { ok: false, error: 'Student payload is required.' };
 
   const id = String(student.id || student.studentId || '').trim();
   if (!id) return { ok: false, error: 'Student ID is required.' };
 
-  const lock = LockService.getDocumentLock();
-  try {
-    lock.waitLock(30000);
-
-    const session = signinFindSession_(sessionId);
-    if (!session || !session.isActive) {
-      return { ok: false, error: 'Session is not active or not found.' };
-    }
-    const sessionType = session.type === 'group' ? 'group' : 'individual';
-
   const now = new Date();
   const details = {
     studentId: id,
     firstName: String(student.firstName || '').trim(),
-    lastName : String(student.lastName || '').trim(),
-    school   : String(student.school || '').trim(),
-    email    : String(student.email || '').trim(),
-    grade    : String(student.grade || '').trim()
+    lastName : String(student.lastName  || '').trim(),
+    school   : String(student.school   || '').trim(),
+    email    : String(student.email    || '').trim(),
+    grade    : String(student.grade    || '').trim()
   };
   if (details.grade) {
     details.grade = signinNormalizeGradeLabel_(details.grade);
   }
 
-    const upsert = signinUpsertKnownStudent(details, { timestamp: now });
-    const fullName = `${details.firstName || ''} ${details.lastName || ''}`.trim() || id;
+  let sessionInfo;
+  let sessionType;
+  let rowIndex = null;
+  let targetSheet = '';
+  let createdKnown = null;
+  let sessSh, SC;
 
-    let rowIndex = null;
-    let targetSheet = '';
+  const lock = LockService.getDocumentLock();
+  try {
+    lock.waitLock(30000);
+
+    const context = signinEnsureSessionsSheet_();
+    sessSh = context.sh;
+    SC = context.C;
+    sessionInfo = signinFindSessionWithContext_(sessionId, sessSh, SC, sessionRowHint);
+    if (!sessionInfo || !sessionInfo.isActive) {
+      return { ok: false, error: 'Session is not active or not found.' };
+    }
+    sessionType = sessionInfo.type === 'group' ? 'group' : 'individual';
+
     if (sessionType === 'group') {
-      rowIndex = signinRecordGroupAttendance_(session, details, now);
+      rowIndex = signinRecordGroupAttendance_(sessionInfo, details, now);
       targetSheet = CONFIG && CONFIG.ATTENDANCE ? CONFIG.ATTENDANCE.SHEET : '';
     } else {
       const { sh: logSh, C: L } = queue_ensureSignInLogSheet_();
@@ -854,10 +933,10 @@ function recordStudentSignIn(payload) {
       const row = new Array(width).fill('');
       if (L.Timestamp != null) row[L.Timestamp] = now;
       if (L.ID != null) row[L.ID] = id;
-      if (L.Name != null) row[L.Name] = fullName;
+      if (L.Name != null) row[L.Name] = `${details.firstName || ''} ${details.lastName || ''}`.trim() || id;
       if (L.School != null) row[L.School] = details.school;
-      if (L.Group != null) row[L.Group] = session.label;
-      if (L.MentorRaw != null) row[L.MentorRaw] = '';
+      if (L.Group != null) row[L.Group] = sessionInfo.label;
+      if (L.MentorRaw != null) row[L.MentorRaw] = mentorIdOpt || '';
       if (L.Status != null) row[L.Status] = STATUS ? STATUS.PENDING : 'Pending';
       if (L.ClaimedBy != null) row[L.ClaimedBy] = '';
       if (L.ClaimedAt != null) row[L.ClaimedAt] = '';
@@ -869,27 +948,189 @@ function recordStudentSignIn(payload) {
       targetSheet = SIGN_IN.SHEET;
     }
 
-    const { sh: sessSh, C: SC } = signinEnsureSessionsSheet_();
     if (SC.LastSignInAt != null) {
-      sessSh.getRange(session.rowIndex, SC.LastSignInAt + 1).setValue(now);
+      sessSh.getRange(sessionInfo.rowIndex, SC.LastSignInAt + 1).setValue(now);
     }
     if (SC.SignInCount != null) {
-      const cell = sessSh.getRange(session.rowIndex, SC.SignInCount + 1);
+      const cell = sessSh.getRange(sessionInfo.rowIndex, SC.SignInCount + 1);
       const current = Number(cell.getValue()) || 0;
       cell.setValue(current + 1);
     }
-
-    return {
-      ok: true,
-      session: { id: session.id, label: session.label, date: session.date, type: sessionType },
-      student: details,
-      createdKnown: upsert.created,
-      rowIndex,
-      targetSheet
-    };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
   } finally {
     try { lock.releaseLock(); } catch (_) {}
   }
+
+  try {
+    signinEnqueueKnownStudentUpdate_(details, now, { updateLastSignIn: true });
+  } catch (err) {
+    console.error('Queueing known-student update failed; falling back to direct write.', err);
+    try {
+      const fallback = signinUpsertKnownStudent(details, { timestamp: now });
+      createdKnown = !!(fallback && fallback.created);
+    } catch (err2) {
+      return { ok: false, error: err2 && err2.message ? err2.message : String(err2) };
+    }
+  }
+
+  return {
+    ok: true,
+    session: sessionInfo ? { id: sessionInfo.id, label: sessionInfo.label, date: sessionInfo.date, type: sessionType } : null,
+    student: details,
+    createdKnown,
+    rowIndex,
+    targetSheet
+  };
+}
+
+function recordStudentBatch(payloadRaw) {
+  const payload = payloadRaw || {};
+  const sessionId = String(payload.sessionId || '').trim();
+  if (!sessionId) return { ok: false, error: 'Session ID is required.' };
+  const studentsRaw = Array.isArray(payload.students) ? payload.students : [];
+  if (!studentsRaw.length) return { ok: false, error: 'No students provided.' };
+
+  const now = new Date();
+  const results = studentsRaw.map((student) => ({
+    studentId: String(student && (student.studentId || student.id) || '').trim(),
+    firstName: String(student && student.firstName || '').trim(),
+    lastName : String(student && student.lastName  || '').trim(),
+    ok: false
+  }));
+  const lock = LockService.getDocumentLock();
+  let sessionInfo;
+  let targetSheet = '';
+  try {
+    lock.waitLock(30000);
+
+    const { sh: sessSh, C: SC } = signinEnsureSessionsSheet_();
+    sessionInfo = signinFindSessionWithContext_(sessionId, sessSh, SC, payload.sessionRow);
+    if (!sessionInfo || !sessionInfo.isActive) {
+      return { ok: false, error: 'Session is not active or not found.' };
+    }
+    if (sessionInfo.type !== 'group') {
+      return {
+        ok: true,
+        results: studentsRaw.map((student) => {
+          const res = recordStudentSignIn({ sessionId, sessionRow: sessionInfo.rowIndex, student });
+          return {
+            studentId: String(student && (student.studentId || student.id) || '').trim(),
+            firstName: String(student && student.firstName || '').trim(),
+            lastName : String(student && student.lastName  || '').trim(),
+            ok: !!(res && res.ok),
+            error: res && !res.ok ? res.error : undefined
+          };
+        })
+      };
+    }
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sh = ss.getSheetByName(CONFIG.ATTENDANCE.SHEET);
+    if (!sh) throw new Error('Attendance sheet not found.');
+    const width = Math.max(1, sh.getLastColumn());
+    const A = CONFIG.ATTENDANCE.COLS || {};
+    const lastRow = sh.getLastRow();
+
+    let formulaTemplate = null;
+    let formulaStartCol = null;
+    let formulaSpan = 0;
+    const formulaCols = [A.inDb, A.consent, A.pre, A.post].filter(c => c != null);
+    if (formulaCols.length) {
+      formulaStartCol = Math.min.apply(null, formulaCols);
+      const formulaMaxCol = Math.max.apply(null, formulaCols);
+      formulaSpan = formulaMaxCol - formulaStartCol + 1;
+      if (lastRow >= 2) {
+        const tmpl = sh.getRange(2, formulaStartCol + 1, 1, formulaSpan).getFormulas();
+        if (tmpl && tmpl.length) {
+          const rowTemplate = tmpl[0] || [];
+          if (rowTemplate.some(f => f)) {
+            formulaTemplate = rowTemplate;
+          }
+        }
+      }
+    }
+
+    const rows = [];
+    results.forEach((result, index) => {
+      const student = studentsRaw[index] || {};
+      if (!result.studentId) {
+        result.error = 'Student ID is required.';
+        return;
+      }
+      const details = {
+        studentId: result.studentId,
+        firstName: result.firstName,
+        lastName : result.lastName,
+        school   : String(student.school || '').trim(),
+        email    : String(student.email || '').trim(),
+        grade    : String(student.grade || '').trim()
+      };
+      if (details.grade) {
+        details.grade = signinNormalizeGradeLabel_(details.grade);
+      }
+      const row = new Array(width).fill('');
+      if (A.timestamp != null) row[A.timestamp] = now;
+      if (A.firstName != null) row[A.firstName] = details.firstName || '';
+      if (A.lastName != null) row[A.lastName] = details.lastName || '';
+      if (A.schoolYear != null) row[A.schoolYear] = details.grade || '';
+      if (A.school != null) row[A.school] = details.school || '';
+      if (A.idNumber != null) row[A.idNumber] = details.studentId || '';
+      if (A.group != null) row[A.group] = sessionInfo.label || '';
+      if (formulaTemplate && formulaStartCol != null && formulaSpan > 0) {
+        for (let offset = 0; offset < formulaSpan; offset++) {
+          const formula = formulaTemplate[offset];
+          if (formula) row[formulaStartCol + offset] = formula;
+        }
+      }
+      rows.push({ row, details, index });
+      result.ok = true;
+      result.firstName = details.firstName;
+      result.lastName = details.lastName;
+    });
+
+    if (rows.length) {
+      sh.getRange(lastRow + 1, 1, rows.length, width).setValues(rows.map(entry => entry.row));
+      if (SC.LastSignInAt != null) {
+        sessSh.getRange(sessionInfo.rowIndex, SC.LastSignInAt + 1).setValue(now);
+      }
+      if (SC.SignInCount != null) {
+        const cell = sessSh.getRange(sessionInfo.rowIndex, SC.SignInCount + 1);
+        const current = Number(cell.getValue()) || 0;
+        cell.setValue(current + rows.length);
+      }
+    }
+
+    rows.forEach(({ details, index }) => {
+      try {
+        signinEnqueueKnownStudentUpdate_(details, now, { updateLastSignIn: true });
+      } catch (err) {
+        console.error('Queueing known-student update failed; falling back to direct write.', err);
+        try {
+          const fallback = signinUpsertKnownStudent(details, { timestamp: now });
+          results[index].createdKnown = !!(fallback && fallback.created);
+        } catch (err2) {
+          results[index].ok = false;
+          results[index].error = err2 && err2.message ? err2.message : String(err2);
+        }
+      }
+    });
+
+    targetSheet = CONFIG && CONFIG.ATTENDANCE ? CONFIG.ATTENDANCE.SHEET : '';
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  } finally {
+    try { lock.releaseLock(); } catch (_) {}
+  }
+
+  return {
+    ok: true,
+    session: sessionInfo ? { id: sessionInfo.id, label: sessionInfo.label, date: sessionInfo.date, type: sessionInfo.type } : null,
+    results,
+    targetSheet
+  };
+}
+
+function listKnownStudentsLite() {
+  return signinFetchKnownStudents_();
 }

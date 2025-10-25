@@ -29,6 +29,8 @@
       manualInput: manualInputRef,
       manualButton: manualButtonRef,
       onManualAdd,
+      localResolver,
+      renderItem
     } = options;
 
     const input = getEl(inputRef);
@@ -36,6 +38,8 @@
     if (!input || !list) return () => {};
 
     if (placeholder) input.placeholder = placeholder;
+    if (!input.hasAttribute('aria-controls') && list.id) input.setAttribute('aria-controls', list.id);
+    input.setAttribute('aria-expanded', 'false');
 
     const manualInput = getEl(manualInputRef);
     const manualButton = getEl(manualButtonRef);
@@ -44,6 +48,15 @@
     let active = -1;
     let pending = 0;
     const cache = new Map();
+    let onSelectChange = null;
+    let onSelectKeyDown = null;
+    let onSelectBlur = null;
+    const isSelect = list && list.tagName && String(list.tagName).toLowerCase() === 'select';
+    const selectDefaultSize = isSelect ? Math.max(Number(list.getAttribute('size')) || 4, 2) : null;
+    if (isSelect) {
+      list.hidden = true;
+      list.classList.remove('is-open');
+    }
 
     const debounce = (fn, ms = 200) => {
       let t;
@@ -54,38 +67,122 @@
     };
 
     function closeMenu() {
-      list.style.display = 'none';
+      if (isSelect) {
+        list.classList.remove('is-open');
+        list.hidden = true;
+        list.innerHTML = '';
+        if (selectDefaultSize) list.size = selectDefaultSize;
+      } else {
+        list.style.display = 'none';
+        list.innerHTML = '';
+      }
+      input.setAttribute('aria-expanded', 'false');
       active = -1;
+    }
+
+    const makeItemNode = typeof renderItem === 'function' ? renderItem : null;
+    const useLocalResolver = typeof localResolver === 'function';
+
+    function openMenu() {
+      input.setAttribute('aria-expanded', 'true');
+      if (isSelect) {
+        list.hidden = false;
+        list.classList.add('is-open');
+        const visible = Math.min(
+          Math.max(selectDefaultSize || 4, Math.min(limit, items.length || 0)),
+          Math.max(items.length, 1)
+        );
+        list.size = visible;
+        list.focus({ preventScroll: true });
+      } else {
+        list.style.display = 'block';
+      }
     }
 
     function render(results) {
       const arr = Array.isArray(results) ? results.slice(0, limit) : [];
-      items = arr.map((it) => ({ ...it, label: formatLabel(it) || String(it.label || '') }));
-      active = -1;
-      list.innerHTML = '';
-      if (window?.console && typeof console.debug === 'function') {
-        console.debug('[Suggest] results', items.length, items);
-      }
-      if (!items.length) {
-        closeMenu();
-        return;
-      }
-      items.forEach((it, idx) => {
-        const li = document.createElement('li');
-        li.className = 'suggest-item';
-        li.textContent = it.label || '';
-        li.addEventListener('mouseenter', () => setActive(idx));
-        li.addEventListener('mouseleave', () => setActive(-1));
-        li.addEventListener('mousedown', (e) => { e.preventDefault(); choose(idx); });
-        li.addEventListener('click', () => choose(idx));
-        list.appendChild(li);
+      items = arr.map((it) => {
+        const label = formatLabel(it) || String(it.label || '');
+        return Object.assign({}, it, { label });
       });
-      list.style.display = 'block';
+      active = -1;
+      if (isSelect) {
+        list.innerHTML = '';
+        if (!items.length) {
+          closeMenu();
+          return;
+        }
+        items.forEach((it, idx) => {
+          const opt = document.createElement('option');
+          opt.value = String(idx);
+          if (makeItemNode) {
+            try {
+              const node = renderItem(it);
+              if (node instanceof Node) {
+                const wrapper = document.createElement('span');
+                wrapper.appendChild(node);
+                opt.textContent = wrapper.textContent || it.optionLabel || it.label || '';
+              } else if (node != null) {
+                opt.textContent = String(node);
+              } else {
+                opt.textContent = it.optionLabel || it.label || '';
+              }
+            } catch (_) {
+              opt.textContent = it.optionLabel || it.label || '';
+            }
+          } else {
+            opt.textContent = it.optionLabel || it.label || '';
+          }
+          list.appendChild(opt);
+        });
+        list.selectedIndex = -1;
+        openMenu();
+      } else {
+        list.innerHTML = '';
+        if (window?.console && typeof console.debug === 'function') {
+          console.debug('[Suggest] results', items.length, items);
+        }
+        if (!items.length) {
+          closeMenu();
+          return;
+        }
+        items.forEach((it, idx) => {
+          const li = document.createElement('li');
+          li.className = 'suggest-item';
+          if (makeItemNode) {
+            try {
+              const node = renderItem(it);
+              if (node instanceof Node) {
+                li.appendChild(node);
+              } else if (node != null) {
+                li.textContent = String(node);
+              } else {
+                li.textContent = it.label || '';
+              }
+            } catch (_) {
+              li.textContent = it.label || '';
+            }
+          } else {
+            li.textContent = it.label || '';
+          }
+          li.addEventListener('mouseenter', () => setActive(idx));
+          li.addEventListener('mouseleave', () => setActive(-1));
+          li.addEventListener('mousedown', (e) => { e.preventDefault(); choose(idx); });
+          li.addEventListener('click', () => choose(idx));
+          list.appendChild(li);
+        });
+        openMenu();
+      }
     }
 
     function setActive(idx) {
-      Array.from(list.children).forEach((el, i) => el.classList.toggle('active', i === idx));
       active = idx;
+      if (isSelect) {
+        if (idx >= 0 && idx < list.options.length) list.selectedIndex = idx;
+        else list.selectedIndex = -1;
+      } else {
+        Array.from(list.children).forEach((el, i) => el.classList.toggle('active', i === idx));
+      }
     }
 
     function choose(idx) {
@@ -94,6 +191,7 @@
       if (typeof onChoose === 'function') onChoose(it);
       if (clearOnChoose) input.value = '';
       closeMenu();
+      input.focus({ preventScroll: true });
     }
 
     const doSuggest = debounce(() => {
@@ -101,6 +199,19 @@
       if (q.length < minChars) {
         render([]);
         return;
+      }
+      if (useLocalResolver) {
+        try {
+          const local = localResolver(q, limit);
+          if (Array.isArray(local)) {
+            render(local);
+            return;
+          }
+        } catch (err) {
+          if (window?.console && typeof console.warn === 'function') {
+            console.warn('[Suggest] local resolver failed, falling back to remote.', err);
+          }
+        }
       }
       if (cache.has(q)) {
         render(cache.get(q));
@@ -132,19 +243,25 @@
 
     function onInput() { doSuggest(); }
     function onKeyDown(e) {
-      if (list.style.display === 'none' || !items.length) return;
+      const menuVisible = isSelect ? !list.hidden && list.options.length > 0 : list.style.display !== 'none';
+      if (!menuVisible || !items.length) return;
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setActive(Math.min(items.length - 1, active + 1));
+        const current = isSelect ? list.selectedIndex : active;
+        setActive(Math.min(items.length - 1, current + 1));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setActive(Math.max(0, active - 1));
+        const current = isSelect ? list.selectedIndex : active;
+        const prev = current <= 0 ? 0 : current - 1;
+        setActive(prev);
       } else if (e.key === 'Enter') {
-        if (active >= 0) {
+        if (isSelect ? list.selectedIndex >= 0 : active >= 0) {
           e.preventDefault();
-          choose(active);
+          const idx = isSelect ? list.selectedIndex : active;
+          choose(idx);
         }
       } else if (e.key === 'Escape') {
+        e.preventDefault();
         closeMenu();
       }
     }
@@ -168,11 +285,42 @@
       manualButton.addEventListener('click', manualHandler);
     }
 
+    if (isSelect) {
+      onSelectChange = () => {
+        const idx = list.selectedIndex;
+        if (idx >= 0) choose(idx);
+      };
+      onSelectKeyDown = (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          if (list.selectedIndex >= 0) choose(list.selectedIndex);
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          closeMenu();
+          input.focus({ preventScroll: true });
+        }
+      };
+      onSelectBlur = () => {
+        // Small timeout to allow click handlers (e.g., onChoose) to run first.
+        setTimeout(() => {
+          if (document.activeElement !== list) closeMenu();
+        }, 120);
+      };
+      list.addEventListener('change', onSelectChange);
+      list.addEventListener('keydown', onSelectKeyDown);
+      list.addEventListener('blur', onSelectBlur);
+    }
+
     return () => {
       input.removeEventListener('input', onInput);
       input.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('click', onDocumentClick);
       if (manualButton && manualHandler) manualButton.removeEventListener('click', manualHandler);
+      if (isSelect) {
+        if (onSelectChange) list.removeEventListener('change', onSelectChange);
+        if (onSelectKeyDown) list.removeEventListener('keydown', onSelectKeyDown);
+        if (onSelectBlur) list.removeEventListener('blur', onSelectBlur);
+      }
     };
   };
 

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Session &amp; Kiosk Links</title>
+    <?!= include('StyleCore'); ?>
+    <?!= include('StyleExtended'); ?>
+  </head>
+  <body>
+    <div class="app-shell admin-shell">
+      <section class="hero panel">
+        <div class="hero-content">
+          <div>
+            <h1>Session &amp; Kiosk Links</h1>
+            <p class="desc">Start today's group session and open the kiosk link instantly.</p>
+          </div>
+        </div>
+        <div class="status-wrap">
+          <div id="adminStatus" class="status-pill" role="status" aria-live="polite" hidden></div>
+        </div>
+      </section>
+
+      <section class="panel admin-form" aria-labelledby="startHeading">
+        <header class="section-head">
+          <div class="section-title">
+            <h2 id="startHeading">Start a circle</h2>
+            <p>Select which circle is signing in today. Links update automatically.</p>
+          </div>
+        </header>
+        <form id="startSessionForm" class="admin-grid">
+          <input id="startDateInput" type="hidden" />
+          <label class="form-field" for="sessionLabelSelect">
+            <span class="label">Circle *</span>
+            <select id="sessionLabelSelect" required>
+              <option value="">-- Select circle --</option>
+              <option value="Bears">Bears</option>
+              <option value="Bulls">Bulls</option>
+              <option value="Cubs">Cubs</option>
+              <option value="Fire">Fire</option>
+              <option value="Soxs">Soxs</option>
+              <option value="Stars">Stars</option>
+            </select>
+          </label>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="startSessionBtn">Start session</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel admin-sessions" aria-labelledby="sessionsHeading">
+        <header class="section-head">
+          <div class="section-title">
+            <h2 id="sessionsHeading">Today's sessions</h2>
+            <p>Open the kiosk link or end a session when sign-in is complete.</p>
+          </div>
+          <label class="hero-field" for="sessionsDateInput">
+            <span class="label">Viewing date</span>
+            <input id="sessionsDateInput" type="date" />
+          </label>
+        </header>
+        <div id="sessionsEmpty" class="empty-state" hidden>No sessions for this date yet.</div>
+        <div id="sessionsList" class="admin-card-list"></div>
+      </section>
+    </div>
+
+    <?!= include('ClientUtils'); ?>
+    <?!= include('SessionAdminScript'); ?>
+  </body>
+</html>

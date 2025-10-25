@@ -235,6 +235,147 @@
   const chipRegistry = new Map();
   const normalizeId = (id) => String(id || '').trim().toUpperCase();
   const unmatchedTitle = 'Not found in database (will be saved as Unmatched).';
+  let rosterResolver = null;
+  let rosterNameLookup = new Map();
+
+  const normalizeText = (value) => String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+
+  function buildRosterLabel(entry) {
+    const first = String(entry.firstName || '').trim();
+    const last  = String(entry.lastName || '').trim();
+    const full  = `${first} ${last}`.trim();
+    const id    = String(entry.id || '').trim();
+    const school = String(entry.school || '').trim();
+    const grade  = String(entry.grade || '').trim();
+    const meta = [school, grade].filter(Boolean);
+    const base = [];
+    if (full) base.push(full);
+    if (id) base.push(id);
+    if (base.length) {
+      return `${base.join(' · ')}${meta.length ? ' (' + meta.join(' • ') + ')' : ''}`;
+    }
+    return id || '';
+  }
+
+  function createRosterResolver(entries) {
+    if (!Array.isArray(entries) || !entries.length) {
+      rosterNameLookup = new Map();
+      return null;
+    }
+    const index = entries.map((entry) => {
+      const id = String(entry.id || '').trim();
+      const first = String(entry.firstName || '').trim();
+      const last  = String(entry.lastName  || '').trim();
+      const full  = `${first} ${last}`.trim();
+      const school = String(entry.school || '').trim();
+      const grade  = String(entry.grade  || '').trim();
+      const label  = entry.label && entry.label.trim() ? entry.label : buildRosterLabel({ id, firstName: first, lastName: last, school, grade });
+      const normId = normalizeId(id);
+      if (normId) {
+        rosterNameLookup.set(normId, full || label || id);
+      }
+      const metaParts = [`ID ${id}`];
+      if (school) metaParts.push(school);
+      if (grade) metaParts.push(grade);
+      const optionLabel = (full || label || id) + (metaParts.length ? ` — ${metaParts.join(' • ')}` : '');
+      const fields = [
+        id,
+        first,
+        last,
+        full,
+        school,
+        grade
+      ].map(normalizeText);
+      return {
+        raw: { id, firstName: first, lastName: last, school, grade, label, optionLabel },
+        fields,
+        full
+      };
+    });
+    return (query, cap = 10) => {
+      const tokens = String(query || '').split(/\s+/).map(normalizeText).filter(Boolean);
+      if (!tokens.length) return [];
+      const scored = [];
+      index.forEach((entry) => {
+        let score = 0;
+        tokens.forEach((tok) => {
+          entry.fields.forEach((field) => {
+            if (!tok || !field) return;
+            if (field === tok) score += 6;
+            else if (field.startsWith(tok)) score += 4;
+            else if (field.includes(tok)) score += 2;
+          });
+        });
+        if (score > 0) scored.push({ entry, score });
+      });
+      scored.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        const nameCmp = (a.entry.full || '').localeCompare(b.entry.full || '');
+        if (nameCmp !== 0) return nameCmp;
+        return a.entry.raw.id.localeCompare(b.entry.raw.id);
+      });
+      return scored.slice(0, cap).map(({ entry }) => entry.raw);
+    };
+  }
+
+  function renderRosterSuggestion(item) {
+    const frag = document.createDocumentFragment();
+    const primary = document.createElement('div');
+    primary.className = 'suggest-line-primary';
+    const displayName = `${item.firstName || ''} ${item.lastName || ''}`.trim() || item.label || item.id;
+    primary.textContent = displayName;
+    frag.appendChild(primary);
+
+    const meta = document.createElement('div');
+    meta.className = 'suggest-line-meta';
+
+    const idSpan = document.createElement('span');
+    idSpan.className = 'suggest-line-id';
+    idSpan.textContent = `ID ${item.id || ''}`;
+    meta.appendChild(idSpan);
+
+    const school = String(item.school || '').trim();
+    if (school) {
+      const schoolSpan = document.createElement('span');
+      schoolSpan.textContent = `• ${school}`;
+      meta.appendChild(schoolSpan);
+    }
+    const grade = String(item.grade || '').trim();
+    if (grade) {
+      const gradeSpan = document.createElement('span');
+      gradeSpan.textContent = `• ${grade}`;
+      meta.appendChild(gradeSpan);
+    }
+
+    if (meta.children.length) frag.appendChild(meta);
+    return frag;
+  }
+
+  function resolveStudentName(id, fallback = '') {
+    const key = normalizeId(id);
+    const preferred = key ? rosterNameLookup.get(key) : null;
+    const fallbackStr = String(fallback || '').trim();
+    if (preferred) return preferred;
+    if (fallbackStr) return fallbackStr;
+    return key || '';
+  }
+
+  function refreshRosterNames(students) {
+    let changed = false;
+    (students || selectedStudents).forEach((student) => {
+      if (!student || !student.id) return;
+      const nextName = resolveStudentName(student.id, student.name);
+      if (nextName && nextName !== student.name) {
+        student.name = nextName;
+        changed = true;
+      }
+    });
+    if (changed) renderStudentChips();
+  }
 
   function updateSelectionSummary(){
     const count = selectedStudents.length;
@@ -294,8 +435,9 @@
     if (!chip) return;
     const label = chip.querySelector('.chip-label');
     const idSpan = chip.querySelector('.muted');
-    if (label) label.textContent = student.name || student.id || '';
-    if (idSpan) idSpan.textContent = ` (${student.id || ''})`;
+    const resolvedName = resolveStudentName(student.id, student.name);
+    if (label) label.textContent = resolvedName || student.id || '';
+    if (idSpan) idSpan.textContent = student.id ? `ID ${student.id}` : '';
     if (student.unmatched) {
       chip.classList.add('chip-unmatched');
       chip.title = unmatchedTitle;
@@ -310,6 +452,7 @@
     if (!wrap) return;
 
     if (!selectedStudents.length) {
+      wrap.classList.add('is-empty');
       chipRegistry.forEach(chip => chip.remove());
       chipRegistry.clear();
       wrap.innerHTML = '';
@@ -321,6 +464,7 @@
       scheduleRefreshRecent();
       return;
     }
+    wrap.classList.remove('is-empty');
 
     const desired = new Set();
     const fragment = document.createDocumentFragment();
@@ -353,16 +497,19 @@
 
   // add helpers
   function addStudentInternal(id, name, { silent = false } = {}) {
-    const clean = String(id||'').trim(); if(!clean) return;
+    const clean = String(id||'').trim(); if(!clean) return false;
     const key = normalizeId(clean);
-    if (!key || selectedLookup.has(key)) return;
-    const s = { id: clean, name: String(name||'').trim(), unmatched:false };
+    if (!key || selectedLookup.has(key)) return false;
+    const displayName = resolveStudentName(clean, name);
+    const s = { id: clean, name: displayName, unmatched:false };
+    if (key) rosterNameLookup.set(key, displayName);
     selectedStudents.push(s);
     selectedLookup.set(key, s);
     if (!silent) renderStudentChips();
     if (!silent) checkAndFlag(s);
+    return true;
   }
-  function addStudent(id, name){ addStudentInternal(id, name, { silent:false }); }
+  function addStudent(id, name){ return addStudentInternal(id, name, { silent:false }); }
   window.__indiv = window.__indiv || {};
   window.__indiv.addStudent = addStudent;
 
@@ -495,7 +642,7 @@
     selectedStudents.splice(0,selectedStudents.length);
     selectedLookup.clear();
     renderStudentChips();
-    $$('studentInput').value=''; $$('manualId').value='';
+    $$('studentInput').value='';
     form.setValue('date', todayYMD());
     form.setValue('duration','');
     form.setValue('contactWith','Participant');
@@ -553,11 +700,15 @@
       form = createForm('indivForm', FIELDS, { cols: 3 });
       updateSelectionSummary();
       updateRecentSummary(0);
+      renderStudentChips();
       document.getElementById('mentorId')?.addEventListener('change', updateMentorSummary);
 
       // one-shot bootstrap: mentors + today
       const boot = await callServer('bootstrapIndividualNotes')
-        .catch(() => ({ mentors:[], today:null }));
+        .catch(() => ({ mentors:[], today:null, roster:[] }));
+
+      rosterResolver = createRosterResolver(boot.roster || []);
+      refreshRosterNames();
 
       const opts = [{ value:'', label:'— Select mentor —'}]
         .concat((boot.mentors||[]).map(m=>({ value:String(m.id||'').toUpperCase(), label: m.name || String(m.id||'') })));
@@ -575,7 +726,10 @@
         const ids = qs.ids.map(x => String(x||'').trim()).filter(Boolean);
         if (ids.length) {
           // show chips immediately
-          ids.forEach(id => addStudentInternal(id, id, { silent:true }));
+          ids.forEach(id => {
+            const display = resolveStudentName(id, id);
+            addStudentInternal(id, display, { silent:true });
+          });
           renderStudentChips();
           refreshRecent();  // load recents right away
 
@@ -586,12 +740,13 @@
           callServer('getNamesForIds', [ids])
             .then(list => {
               const nameById = new Map((list||[]).map(x => [String(x.id), String(x.name||'')]));
-              let changed = false;
               selectedStudents.forEach(s => {
                 const nm = nameById.get(String(s.id));
-                if (nm && nm !== s.name) { s.name = nm; changed = true; }
+                if (nm) {
+                  rosterNameLookup.set(normalizeId(s.id), nm);
+                }
               });
-              if (changed) renderStudentChips();
+              refreshRosterNames();
             })
             .catch(()=>{});
 
@@ -604,18 +759,23 @@
         AppSuggest.wireRosterSuggest({
           input: 'studentInput',
           list: 'studentSuggest',
-          manualInput: 'manualId',
-          manualButton: 'addIdBtn',
           run,
-          onManualAdd: (id) => addStudent(id, id),
+          localResolver: (query, limit) => {
+            if (typeof rosterResolver === 'function') return rosterResolver(query, limit);
+            return null;
+          },
+          renderItem: renderRosterSuggestion,
           onChoose: (it) => {
             const full = `${it.firstName || ''} ${it.lastName || ''}`.trim();
-            addStudent(it.id || it.value || '', full || it.label);
+            const id = it.id || it.value || '';
+            const display = resolveStudentName(id, full || it.label || id);
+            addStudent(id, display);
           },
         });
       }
       $$('saveBtn')?.addEventListener('click', onSave);
       $$('clearBtn')?.addEventListener('click', onClear);
+      $$('clearBtnSecondary')?.addEventListener('click', onClear);
       setStatus('');
 
       // lazy-load "recent" after first paint
