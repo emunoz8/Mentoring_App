@@ -53,6 +53,10 @@
     selectedStudent: null,
     sessions: []
   };
+  let rosterEntries = [];
+  let rosterResolver = null;
+  let rosterRenderer = null;
+  let suggestHandle = null;
 
   function syncDateInputs() {
     const today = todayYMD();
@@ -88,6 +92,16 @@
       : 'Add & sign in';
   }
 
+  function formatStudentDisplay(student) {
+    if (!student) return '';
+    const full = `${student.firstName || ''} ${student.lastName || ''}`.trim();
+    return full || student.id || '';
+  }
+
+  function closeSuggestMenu() {
+    if (suggestHandle && typeof suggestHandle.close === 'function') suggestHandle.close();
+  }
+
   function renderSelectedStudent() {
     const card = $('selectedStudentCard');
     const summary = $('selectedStudentSummary');
@@ -105,8 +119,8 @@
       return;
     }
 
-    const fullName = `${student.firstName || ''} ${student.lastName || ''}`.trim();
-    summary.textContent = fullName || student.id || 'Selected student';
+    const display = formatStudentDisplay(student);
+    summary.textContent = display || 'Selected student';
     card.classList.remove('muted');
     meta.classList.remove('is-empty');
     const values = meta.querySelectorAll('.fact-value');
@@ -120,6 +134,67 @@
     state.selectedStudent = null;
     const search = $('studentSearch');
     if (search) search.value = '';
+    closeSuggestMenu();
+    renderSelectedStudent();
+  }
+
+  function normalizeRosterItem(item) {
+    if (window.AppSuggest && typeof AppSuggest.normalizeRosterEntry === 'function') {
+      return AppSuggest.normalizeRosterEntry(item);
+    }
+    if (!item) return null;
+    const norm = (value) => String(value || '').trim();
+    const entry = {
+      id: norm(item.id || item.value),
+      firstName: norm(item.firstName),
+      lastName: norm(item.lastName),
+      school: norm(item.school),
+      email: norm(item.email),
+      grade: norm(item.grade),
+      label: norm(item.label),
+    };
+    const full = `${entry.firstName} ${entry.lastName}`.trim();
+    entry._fullName = full;
+    if (!entry.label) {
+      entry.label = full ? `${full} · ${entry.id}` : entry.id;
+    }
+    const normalizeSearch = (val) => String(val || '').toLowerCase();
+    entry._searchFields = [
+      entry.id,
+      entry.firstName,
+      entry.lastName,
+      full,
+      entry.school,
+      entry.email,
+      entry.grade,
+    ].map(normalizeSearch);
+    return entry;
+  }
+
+  function setRosterEntries(list) {
+    rosterEntries = Array.isArray(list)
+      ? list.map((item) => normalizeRosterItem(item)).filter(Boolean)
+      : [];
+    rosterResolver = null;
+  }
+
+  function ensureRosterHelpers() {
+    if (!window.AppSuggest) return;
+    if (!rosterResolver && typeof AppSuggest.createRosterLocalResolver === 'function') {
+      rosterResolver = AppSuggest.createRosterLocalResolver(() => rosterEntries, { limit: 12 });
+    }
+    if (!rosterRenderer && typeof AppSuggest.createRosterItemRenderer === 'function') {
+      rosterRenderer = AppSuggest.createRosterItemRenderer();
+    }
+  }
+
+  function handleSearchInputChange() {
+    const input = $('studentSearch');
+    if (!input) return;
+    if (!state.selectedStudent) return;
+    const display = formatStudentDisplay(state.selectedStudent).trim();
+    if (display && display === input.value.trim()) return;
+    state.selectedStudent = null;
     renderSelectedStudent();
   }
 
@@ -331,27 +406,44 @@
   }
 
   function wireSuggest() {
-    if (!window.AppSuggest || typeof AppSuggest.wireRemoteSuggest !== 'function') return;
-    AppSuggest.wireRemoteSuggest({
+    if (!window.AppSuggest || typeof AppSuggest.wireRosterSuggest !== 'function') return;
+    ensureRosterHelpers();
+    if (!rosterResolver && typeof AppSuggest.createRosterLocalResolver === 'function') {
+      rosterResolver = AppSuggest.createRosterLocalResolver(() => rosterEntries, { limit: 12 });
+    }
+    if (!rosterRenderer && typeof AppSuggest.createRosterItemRenderer === 'function') {
+      rosterRenderer = AppSuggest.createRosterItemRenderer();
+    }
+    suggestHandle = AppSuggest.wireRosterSuggest({
       input: 'studentSearch',
       list: 'studentSuggestList',
       minChars: 2,
       limit: 12,
       rpc: 'signInSuggestPeople',
       placeholder: 'Start typing your first or last name…',
+      clearOnChoose: false,
+      localResolver: rosterResolver || null,
+      resultMapper: normalizeRosterItem,
+      renderItem: rosterRenderer || undefined,
       onChoose(item) {
-        state.selectedStudent = {
-          id: String(item.id || item.value || '').trim(),
-          firstName: String(item.firstName || '').trim(),
-          lastName: String(item.lastName || '').trim(),
-          school: String(item.school || '').trim(),
-          email: String(item.email || '').trim(),
-          grade: String(item.grade || '').trim()
-        };
+        state.selectedStudent = item ? Object.assign({}, item) : null;
+        const input = $('studentSearch');
+        if (input && item) {
+          input.value = formatStudentDisplay(item) || item.id || '';
+        }
         renderSelectedStudent();
-      },
-      clearOnChoose: true
+      }
     });
+  }
+
+  function loadRoster() {
+    return callServer('listKnownStudentsLite', [])
+      .then((list) => {
+        setRosterEntries(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {
+        setRosterEntries([]);
+      });
   }
 
   function wireEvents() {
@@ -375,12 +467,14 @@
     $('endSessionBtn')?.addEventListener('click', handleEndSession);
     $('signInKnownBtn')?.addEventListener('click', handleKnownSignIn);
     $('manualEntryForm')?.addEventListener('submit', handleManualSubmit);
+    $('studentSearch')?.addEventListener('input', handleSearchInputChange);
   }
 
   function init() {
     syncDateInputs();
     wireEvents();
     wireSuggest();
+    loadRoster();
     renderSelectedStudent();
     refreshSessions();
     $('studentSearch')?.focus();

@@ -7,10 +7,11 @@
     state: {
       session: null,
       roster: [],
-      filtered: [],
       selected: null,
-      activeIndex: -1
-    }
+    },
+    suggestHandle: null,
+    rosterResolver: null,
+    rosterRenderer: null,
   };
   window.__OFY_groupKiosk = App;
 
@@ -31,48 +32,64 @@
     banner.removeAttribute('hidden');
   }
 
-  function hideSuggestions() {
-    const list = $('studentSuggestList');
-    App.state.filtered = [];
-    App.state.activeIndex = -1;
-    if (list) {
-      list.innerHTML = '';
-      list.style.display = 'none';
-      list.setAttribute('hidden', '');
+  function closeSuggestMenu() {
+    if (App.suggestHandle && typeof App.suggestHandle.close === 'function') {
+      App.suggestHandle.close();
     }
   }
 
-  function renderSuggestions(results) {
-    const list = $('studentSuggestList');
-    if (!list) return;
-    if (!results.length) { hideSuggestions(); return; }
-    App.state.filtered = results;
-    App.state.activeIndex = -1;
-    list.innerHTML = '';
-    results.slice(0, 12).forEach((entry, index) => {
-      const li = document.createElement('li');
-      li.className = 'suggest-item';
-      const full = `${entry.firstName || ''} ${entry.lastName || ''}`.trim();
-      li.textContent = full ? `${full} (${entry.id})` : entry.id;
-      li.dataset.index = String(index);
-      li.addEventListener('mousedown', (event) => {
-        event.preventDefault();
-        chooseSuggestion(index);
-      });
-      list.appendChild(li);
-    });
-    list.style.display = 'block';
-    list.removeAttribute('hidden');
+  function formatStudentDisplay(entry) {
+    if (!entry) return '';
+    const full = `${entry.firstName || ''} ${entry.lastName || ''}`.trim();
+    return full || entry.id || '';
   }
 
-  function chooseSuggestion(index) {
-    const item = App.state.filtered[index];
-    const input = $('studentSearch');
-    if (!item || !input) return;
-    App.state.selected = item;
-    input.value = `${item.firstName || ''} ${item.lastName || ''}`.trim() || item.id;
-    renderSelectedStudent();
-    hideSuggestions();
+  function normalizeRosterItem(item) {
+    if (window.AppSuggest && typeof AppSuggest.normalizeRosterEntry === 'function') {
+      return AppSuggest.normalizeRosterEntry(item);
+    }
+    if (!item) return null;
+    const norm = (value) => String(value || '').trim();
+    const entry = {
+      id: norm(item.id || item.value),
+      firstName: norm(item.firstName),
+      lastName: norm(item.lastName),
+      school: norm(item.school),
+      email: norm(item.email),
+      grade: norm(item.grade),
+      label: norm(item.label),
+    };
+    entry._fullName = `${entry.firstName} ${entry.lastName}`.trim();
+    const normalizeSearch = (val) => String(val || '').toLowerCase();
+    entry._searchFields = [
+      entry.id,
+      entry.firstName,
+      entry.lastName,
+      entry._fullName,
+      entry.school,
+      entry.email,
+      entry.grade,
+    ].map(normalizeSearch);
+    if (!entry.label) {
+      entry.label = entry._fullName ? `${entry._fullName} · ${entry.id}` : entry.id;
+    }
+    return entry;
+  }
+
+  function setRoster(list) {
+    App.state.roster = Array.isArray(list)
+      ? list.map((item) => normalizeRosterItem(item)).filter(Boolean)
+      : [];
+  }
+
+  function ensureRosterHelpers() {
+    if (!window.AppSuggest) return;
+    if (!App.rosterResolver && typeof AppSuggest.createRosterLocalResolver === 'function') {
+      App.rosterResolver = AppSuggest.createRosterLocalResolver(() => App.state.roster, { limit: 12 });
+    }
+    if (!App.rosterRenderer && typeof AppSuggest.createRosterItemRenderer === 'function') {
+      App.rosterRenderer = AppSuggest.createRosterItemRenderer();
+    }
   }
 
   function renderSelectedStudent() {
@@ -92,7 +109,7 @@
     }
     card.classList.remove('muted');
     meta.classList.remove('is-empty');
-    summary.textContent = `${selected.firstName || ''} ${selected.lastName || ''}`.trim() || selected.id;
+    summary.textContent = formatStudentDisplay(selected) || selected.id;
     const cells = meta.querySelectorAll('.fact-value');
     if (cells[0]) cells[0].textContent = selected.id || '-';
     if (cells[1]) cells[1].textContent = selected.school || '-';
@@ -100,72 +117,51 @@
     button.disabled = false;
   }
 
-  function filterRoster(query) {
-    const tokens = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
-    if (!tokens.length) return [];
-    return App.state.roster.filter((entry) => {
-      const haystack = [
-        entry.id,
-        entry.firstName,
-        entry.lastName,
-        `${entry.firstName || ''} ${entry.lastName || ''}`.trim(),
-        entry.school,
-        entry.email
-      ].map((part) => String(part || '').toLowerCase());
-      return tokens.every((token) => haystack.some((part) => part.indexOf(token) !== -1));
-    });
+  function clearSelectedStudent() {
+    App.state.selected = null;
+    const input = $('studentSearch');
+    if (input) input.value = '';
+    closeSuggestMenu();
+    renderSelectedStudent();
   }
 
-  function handleSearchInput() {
+  function handleSearchInputChange() {
     const input = $('studentSearch');
     if (!input) return;
-    const query = input.value;
-    if (!App.state.roster.length || query.trim().length < 2) {
-      hideSuggestions();
-      return;
+    if (!App.state.selected) return;
+    const display = formatStudentDisplay(App.state.selected).trim();
+    if (display && display === input.value.trim()) return;
+    App.state.selected = null;
+    renderSelectedStudent();
+  }
+
+  function wireSuggest() {
+    if (!window.AppSuggest || typeof AppSuggest.wireRosterSuggest !== 'function') return;
+    ensureRosterHelpers();
+    if (!App.rosterResolver && typeof AppSuggest.createRosterLocalResolver === 'function') {
+      App.rosterResolver = AppSuggest.createRosterLocalResolver(() => App.state.roster, { limit: 12 });
     }
-    const matches = filterRoster(query);
-    renderSuggestions(matches);
-  }
-
-  function handleSearchKeydown(event) {
-    if (!App.state.filtered.length) return;
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      App.state.activeIndex = (App.state.activeIndex + 1) % App.state.filtered.length;
-      highlightActiveSuggestion();
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      App.state.activeIndex = App.state.activeIndex <= 0
-        ? App.state.filtered.length - 1
-        : App.state.activeIndex - 1;
-      highlightActiveSuggestion();
-    } else if (event.key === 'Enter') {
-      event.preventDefault();
-      if (App.state.activeIndex < 0) App.state.activeIndex = 0;
-      chooseSuggestion(App.state.activeIndex);
-    } else if (event.key === 'Escape') {
-      hideSuggestions();
-      App.state.selected = null;
-      renderSelectedStudent();
+    if (!App.rosterRenderer && typeof AppSuggest.createRosterItemRenderer === 'function') {
+      App.rosterRenderer = AppSuggest.createRosterItemRenderer();
     }
-  }
-
-  function highlightActiveSuggestion() {
-    const list = $('studentSuggestList');
-    if (!list) return;
-    Array.from(list.children).forEach((el, idx) => el.classList.toggle('active', idx === App.state.activeIndex));
-  }
-
-  function attachSearchEvents() {
-    const input = $('studentSearch');
-    const suggestionList = $('studentSuggestList');
-    if (!input || !suggestionList) return;
-    input.addEventListener('input', handleSearchInput);
-    input.addEventListener('keydown', handleSearchKeydown);
-    document.addEventListener('click', (event) => {
-      if (!suggestionList.contains(event.target) && event.target !== input) {
-        hideSuggestions();
+    App.suggestHandle = AppSuggest.wireRosterSuggest({
+      input: 'studentSearch',
+      list: 'studentSuggestList',
+      minChars: 2,
+      limit: 12,
+      rpc: 'signInSuggestPeople',
+      placeholder: 'Start typing your first or last name…',
+      clearOnChoose: false,
+      localResolver: App.rosterResolver || null,
+      resultMapper: normalizeRosterItem,
+      renderItem: App.rosterRenderer || undefined,
+      onChoose(item) {
+        App.state.selected = item ? Object.assign({}, item) : null;
+        const input = $('studentSearch');
+        if (input && item) {
+          input.value = formatStudentDisplay(item) || item.id || '';
+        }
+        renderSelectedStudent();
       }
     });
   }
@@ -173,7 +169,7 @@
   function openManualSheet() {
     const sheet = $('manualSheet');
     if (!sheet) return;
-    hideSuggestions();
+    closeSuggestMenu();
     sheet.classList.add('is-open');
     sheet.setAttribute('aria-hidden', 'false');
     window.setTimeout(() => {
@@ -209,11 +205,8 @@
           showStatus((res && res.error) || 'Sign-in failed.', 'bad');
         } else {
           showStatus(`Recorded attendance for ${selected.firstName || selected.lastName || selected.id}.`, 'ok');
-          App.state.selected = null;
+          clearSelectedStudent();
           const input = $('studentSearch');
-          if (input) input.value = '';
-          hideSuggestions();
-          renderSelectedStudent();
           if (input) input.focus();
         }
         if (button) button.disabled = false;
@@ -292,24 +285,17 @@
           date,
           rowIndex: match ? match.rowIndex : null
         };
+        App.state.selected = null;
+        renderSelectedStudent();
         renderSessionSummary();
         window.google.script.run
           .withSuccessHandler((roster) => {
-            App.state.roster = Array.isArray(roster)
-              ? roster.map((item) => ({
-                  id: String(item.id || '').trim(),
-                  firstName: String(item.firstName || '').trim(),
-                  lastName: String(item.lastName || '').trim(),
-                  school: String(item.school || '').trim(),
-                  email: String(item.email || '').trim(),
-                  grade: String(item.grade || '').trim()
-                }))
-              : [];
+            setRoster(roster);
             if (window.console && typeof console.debug === 'function') {
               console.debug('[Roster] Loaded', App.state.roster.length);
             }
           })
-          .withFailureHandler(() => { App.state.roster = []; })
+          .withFailureHandler(() => { setRoster([]); })
           .listKnownStudentsLite();
       })
       .withFailureHandler((err) => {
@@ -319,8 +305,7 @@
   }
 
   function init() {
-    attachSearchEvents();
-    hideSuggestions();
+    wireSuggest();
     renderSelectedStudent();
 
     const manualForm = $('manualEntryForm');
@@ -347,6 +332,9 @@
 
     const knownBtn = $('signInKnownBtn');
     if (knownBtn) knownBtn.addEventListener('click', recordKnownSignIn);
+
+    const search = $('studentSearch');
+    if (search) search.addEventListener('input', handleSearchInputChange);
 
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') closeManualSheet();
