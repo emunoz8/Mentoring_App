@@ -1132,5 +1132,16 @@ function recordStudentBatch(payloadRaw) {
 }
 
 function listKnownStudentsLite() {
-  return signinFetchKnownStudents_();
+  const index = signinFetchSuggestIndex_();
+  if (!Array.isArray(index) || !index.length) return [];
+  return index.map((entry) => ({
+    id: entry.id,
+    firstName: entry.firstName,
+    lastName: entry.lastName,
+    school: entry.school,
+    email: entry.email,
+    grade: entry.grade,
+    source: entry.source || '',
+    label: entry.label,
+  }));
 }

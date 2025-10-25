@@ -30,7 +30,8 @@
       manualButton: manualButtonRef,
       onManualAdd,
       localResolver,
-      renderItem
+      renderItem,
+      resultMapper
     } = options;
 
     const input = getEl(inputRef);
@@ -81,6 +82,7 @@
     }
 
     const makeItemNode = typeof renderItem === 'function' ? renderItem : null;
+    const mapResult = typeof resultMapper === 'function' ? resultMapper : null;
     const useLocalResolver = typeof localResolver === 'function';
 
     function openMenu() {
@@ -102,8 +104,9 @@
     function render(results) {
       const arr = Array.isArray(results) ? results.slice(0, limit) : [];
       items = arr.map((it) => {
-        const label = formatLabel(it) || String(it.label || '');
-        return Object.assign({}, it, { label });
+        const base = mapResult ? (mapResult(it) || {}) : it || {};
+        const label = formatLabel(base) || String(base && base.label ? base.label : '');
+        return Object.assign({}, base, { label });
       });
       active = -1;
       if (isSelect) {
@@ -311,7 +314,7 @@
       list.addEventListener('blur', onSelectBlur);
     }
 
-    return () => {
+    const teardown = () => {
       input.removeEventListener('input', onInput);
       input.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('click', onDocumentClick);
@@ -322,6 +325,9 @@
         if (onSelectBlur) list.removeEventListener('blur', onSelectBlur);
       }
     };
+    teardown.close = () => closeMenu();
+    teardown.destroy = teardown;
+    return teardown;
   };
 
   global.wireRosterSuggest = function wireRosterSuggest(options = {}) {
@@ -356,6 +362,135 @@
     if (typeof merged.run !== 'function') merged.run = defaultRun;
 
     return global.wireRemoteSuggest(merged);
+  };
+
+  const SEARCH_NORM_RE = /[\u0300-\u036f]/g;
+  function normalizeSearchValue(value) {
+    return String(value == null ? '' : value)
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(SEARCH_NORM_RE, '')
+      .trim();
+  }
+
+  global.normalizeRosterEntry = function normalizeRosterEntry(raw) {
+    if (!raw) return null;
+    const entry = {
+      id: String(raw.id || raw.value || '').trim(),
+      firstName: String(raw.firstName || '').trim(),
+      lastName: String(raw.lastName || '').trim(),
+      school: String(raw.school || '').trim(),
+      email: String(raw.email || '').trim(),
+      grade: String(raw.grade || '').trim(),
+      source: String(raw.source || '').trim(),
+      label: String(raw.label || '').trim(),
+      rowIndex: raw.rowIndex == null ? null : raw.rowIndex,
+    };
+    if (!entry.label) {
+      const name = `${entry.firstName} ${entry.lastName}`.trim();
+      if (name && entry.id) {
+        const meta = [entry.school, entry.grade].filter(Boolean);
+        entry.label = `${name} · ${entry.id}${meta.length ? ' (' + meta.join(' • ') + ')' : ''}`;
+      } else if (name) {
+        entry.label = name;
+      } else if (entry.id) {
+        const meta = [entry.school, entry.grade].filter(Boolean);
+        entry.label = `${entry.id}${meta.length ? ' (' + meta.join(' • ') + ')' : ''}`;
+      }
+    }
+    entry._fullName = `${entry.firstName} ${entry.lastName}`.trim();
+    entry._searchFields = [
+      entry.id,
+      entry.firstName,
+      entry.lastName,
+      entry._fullName,
+      entry.school,
+      entry.email,
+      entry.grade,
+    ].map(normalizeSearchValue);
+    return entry;
+  };
+
+  global.createRosterLocalResolver = function createRosterLocalResolver(source, defaults = {}) {
+    const getList = typeof source === 'function' ? source : () => source;
+    const fallbackLimit = Number(defaults.limit) || 10;
+    return (query, limit) => {
+      const list = getList();
+      if (!Array.isArray(list) || !list.length) return null;
+      const tokens = String(query || '')
+        .split(/\s+/)
+        .map(normalizeSearchValue)
+        .filter(Boolean);
+      if (!tokens.length) return [];
+      const scored = [];
+      list.forEach((entry) => {
+        if (!entry) return;
+        const fields = Array.isArray(entry._searchFields) ? entry._searchFields : [];
+        if (!fields.length) return;
+        let score = 0;
+        tokens.forEach((tok) => {
+          fields.forEach((field) => {
+            if (!tok || !field) return;
+            if (field === tok) score += 6;
+            else if (field.startsWith(tok)) score += 4;
+            else if (field.indexOf(tok) !== -1) score += 2;
+          });
+        });
+        if (score > 0) scored.push({ entry, score });
+      });
+      if (!scored.length) return null;
+      scored.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        const nameA = a.entry && a.entry._fullName ? a.entry._fullName : '';
+        const nameB = b.entry && b.entry._fullName ? b.entry._fullName : '';
+        const cmp = nameA.localeCompare(nameB);
+        if (cmp !== 0) return cmp;
+        const idA = a.entry && a.entry.id ? a.entry.id : '';
+        const idB = b.entry && b.entry.id ? b.entry.id : '';
+        return idA.localeCompare(idB);
+      });
+      const cap = Math.max(1, Math.min(Number(limit) || fallbackLimit, scored.length));
+      return scored.slice(0, cap).map((item) => item.entry);
+    };
+  };
+
+  global.createRosterItemRenderer = function createRosterItemRenderer() {
+    return (item) => {
+      if (!item) return document.createTextNode('');
+      const wrapper = document.createElement('div');
+      const primary = document.createElement('div');
+      primary.className = 'suggest-line-primary';
+      primary.textContent = item._fullName || item.label || item.id || '';
+      wrapper.appendChild(primary);
+
+      const meta = document.createElement('div');
+      meta.className = 'suggest-line-meta';
+
+      if (item.id) {
+        const id = document.createElement('span');
+        id.className = 'suggest-line-id';
+        id.textContent = item.id;
+        meta.appendChild(id);
+      }
+
+      if (item.grade) {
+        const grade = document.createElement('span');
+        grade.textContent = item.grade;
+        meta.appendChild(grade);
+      }
+
+      if (item.school) {
+        const school = document.createElement('span');
+        school.textContent = item.school;
+        meta.appendChild(school);
+      }
+
+      if (meta.childElementCount) {
+        wrapper.appendChild(meta);
+      }
+
+      return wrapper;
+    };
   };
 
   global.createMultiSelect = function createMultiSelect(config = {}) {

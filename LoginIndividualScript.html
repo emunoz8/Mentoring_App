@@ -46,14 +46,14 @@
     selected: null,
     mentors: [],
     roster: [],
-    filtered: [],
-    activeIndex: -1
   };
   let touchStartY = null;
   let statusTimer = null;
+  let suggestHandle = null;
+  let rosterResolver = null;
+  let rosterRenderer = null;
 
   const searchInput = $('studentSearch');
-  const suggestList = $('studentSuggestList');
 
   function showStatus(message, tone = 'info', autoClear = false) {
     clearTimeout(statusTimer);
@@ -66,7 +66,7 @@
   function openManualSheet() {
     const sheet = $('manualSheet');
     if (!sheet) return;
-    hideSuggestions();
+    closeSuggestMenu();
     sheet.classList.add('is-open');
     sheet.setAttribute('aria-hidden', 'false');
     setTimeout(() => $('manualId')?.focus(), 120);
@@ -77,6 +77,105 @@
     if (!sheet) return;
     sheet.classList.remove('is-open');
     sheet.setAttribute('aria-hidden', 'true');
+  }
+
+  function closeSuggestMenu() {
+    if (suggestHandle && typeof suggestHandle.close === 'function') {
+      suggestHandle.close();
+    }
+  }
+
+  function formatStudentDisplay(student) {
+    if (!student) return '';
+    const full = `${student.firstName || ''} ${student.lastName || ''}`.trim();
+    return full || student.id || '';
+  }
+
+  function normalizeRosterItem(item) {
+    if (window.AppSuggest && typeof AppSuggest.normalizeRosterEntry === 'function') {
+      return AppSuggest.normalizeRosterEntry(item);
+    }
+    if (!item) return null;
+    const norm = (value) => String(value || '').trim();
+    const entry = {
+      id: norm(item.id || item.value),
+      firstName: norm(item.firstName),
+      lastName: norm(item.lastName),
+      school: norm(item.school),
+      email: norm(item.email),
+      grade: norm(item.grade),
+      label: norm(item.label),
+    };
+    entry._fullName = `${entry.firstName} ${entry.lastName}`.trim();
+    const normalizeSearch = (val) => String(val || '').toLowerCase();
+    entry._searchFields = [
+      entry.id,
+      entry.firstName,
+      entry.lastName,
+      entry._fullName,
+      entry.school,
+      entry.email,
+      entry.grade,
+    ].map(normalizeSearch);
+    if (!entry.label) {
+      entry.label = entry._fullName ? `${entry._fullName} · ${entry.id}` : entry.id;
+    }
+    return entry;
+  }
+
+  function setRoster(list) {
+    state.roster = Array.isArray(list)
+      ? list.map((item) => normalizeRosterItem(item)).filter(Boolean)
+      : [];
+  }
+
+  function ensureRosterHelpers() {
+    if (!window.AppSuggest) return;
+    if (!rosterResolver && typeof AppSuggest.createRosterLocalResolver === 'function') {
+      rosterResolver = AppSuggest.createRosterLocalResolver(() => state.roster, { limit: 12 });
+    }
+    if (!rosterRenderer && typeof AppSuggest.createRosterItemRenderer === 'function') {
+      rosterRenderer = AppSuggest.createRosterItemRenderer();
+    }
+  }
+
+  function handleSearchInputChange() {
+    if (!searchInput) return;
+    if (!state.selected) return;
+    const display = formatStudentDisplay(state.selected).trim();
+    if (display && display === searchInput.value.trim()) return;
+    state.selected = null;
+    renderSelected();
+  }
+
+  function wireSuggest() {
+    if (!window.AppSuggest || typeof AppSuggest.wireRosterSuggest !== 'function') return;
+    ensureRosterHelpers();
+    if (!rosterResolver && typeof AppSuggest.createRosterLocalResolver === 'function') {
+      rosterResolver = AppSuggest.createRosterLocalResolver(() => state.roster, { limit: 12 });
+    }
+    if (!rosterRenderer && typeof AppSuggest.createRosterItemRenderer === 'function') {
+      rosterRenderer = AppSuggest.createRosterItemRenderer();
+    }
+    suggestHandle = AppSuggest.wireRosterSuggest({
+      input: 'studentSearch',
+      list: 'studentSuggestList',
+      minChars: 2,
+      limit: 12,
+      rpc: 'signInSuggestPeople',
+      placeholder: 'Start typing your first or last name…',
+      clearOnChoose: false,
+      localResolver: rosterResolver || null,
+      resultMapper: normalizeRosterItem,
+      renderItem: rosterRenderer || undefined,
+      onChoose(item) {
+        state.selected = item ? Object.assign({}, item) : null;
+        if (searchInput && item) {
+          searchInput.value = formatStudentDisplay(item) || item.id || '';
+        }
+        renderSelected();
+      }
+    });
   }
 
   function getQS() {
@@ -147,7 +246,7 @@
       btn.disabled = true;
       return;
     }
-    const display = `${student.firstName || ''} ${student.lastName || ''}`.trim() || student.id;
+    const display = formatStudentDisplay(student);
     summary.textContent = display;
     meta.classList.remove('is-empty');
     const values = meta.querySelectorAll('.fact-value');
@@ -159,122 +258,9 @@
 
   function clearSelectedStudent() {
     state.selected = null;
+    if (searchInput) searchInput.value = '';
+    closeSuggestMenu();
     renderSelected();
-  }
-
-  function hideSuggestions() {
-    state.filtered = [];
-    state.activeIndex = -1;
-    if (suggestList) {
-      suggestList.innerHTML = '';
-      suggestList.style.display = 'none';
-    }
-  }
-
-  function highlightSuggestion() {
-    if (!suggestList) return;
-    Array.from(suggestList.children).forEach((el, idx) => {
-      el.classList.toggle('active', idx === state.activeIndex);
-    });
-  }
-
-  function chooseSuggestion(index) {
-    const item = state.filtered[index];
-    if (!item) return;
-    searchInput.value = `${item.firstName || ''} ${item.lastName || ''}`.trim() || item.id;
-    state.selected = item;
-    hideSuggestions();
-    renderSelected();
-  }
-
-  function filterRoster(query) {
-    const tokens = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
-    if (!tokens.length) return [];
-    const results = [];
-    state.roster.forEach((item) => {
-      const haystack = [
-        item.id,
-        item.firstName,
-        item.lastName,
-        `${item.firstName || ''} ${item.lastName || ''}`.trim(),
-        item.school,
-        item.email
-      ].map((part) => String(part || '').toLowerCase());
-      const matches = tokens.every((token) => haystack.some((part) => part.includes(token)));
-      if (matches) results.push(item);
-    });
-    return results.slice(0, 12);
-  }
-
-  function renderSuggestions(list) {
-    if (!suggestList) return;
-    if (!list.length) {
-      hideSuggestions();
-      return;
-    }
-    state.filtered = list;
-    state.activeIndex = -1;
-    suggestList.innerHTML = '';
-    list.forEach((item, idx) => {
-      const li = document.createElement('li');
-      li.className = 'suggest-item';
-      const full = `${item.firstName || ''} ${item.lastName || ''}`.trim();
-      li.textContent = full ? `${full} (${item.id})` : item.id;
-      li.dataset.index = String(idx);
-      li.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        chooseSuggestion(idx);
-      });
-      suggestList.appendChild(li);
-    });
-    suggestList.style.display = 'block';
-  }
-
-  function handleSearchInput() {
-    const query = searchInput.value;
-    if (query.trim().length < 2) {
-      hideSuggestions();
-      return;
-    }
-    const matches = filterRoster(query);
-    renderSuggestions(matches);
-  }
-
-  function handleSearchKeydown(e) {
-    if (!state.filtered.length) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      state.activeIndex = (state.activeIndex + 1) % state.filtered.length;
-      highlightSuggestion();
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      state.activeIndex = state.activeIndex <= 0
-        ? state.filtered.length - 1
-        : state.activeIndex - 1;
-      highlightSuggestion();
-    } else if (e.key === 'Enter') {
-      if (state.activeIndex < 0) state.activeIndex = 0;
-      const item = state.filtered[state.activeIndex];
-      if (item) {
-        e.preventDefault();
-        chooseSuggestion(state.activeIndex);
-      }
-    } else if (e.key === 'Escape') {
-      hideSuggestions();
-      clearSelectedStudent();
-    }
-  }
-
-  function attachSearchHandlers() {
-    if (!searchInput) return;
-    searchInput.addEventListener('input', handleSearchInput);
-    searchInput.addEventListener('keydown', handleSearchKeydown);
-    document.addEventListener('click', (e) => {
-      if (!suggestList) return;
-      if (!suggestList.contains(e.target) && e.target !== searchInput) {
-        hideSuggestions();
-      }
-    });
   }
 
   function resolveMentor() {
@@ -304,9 +290,7 @@
           : (details.studentId || details.id || 'student');
         showStatus(`Signed in ${display}.`, 'ok', true);
         clearSelectedStudent();
-        searchInput.value = '';
-        hideSuggestions();
-        searchInput.focus();
+        if (searchInput) searchInput.focus();
         return true;
       })
       .catch((err) => {
@@ -380,6 +364,7 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') closeManualSheet();
     });
+    searchInput?.addEventListener('input', handleSearchInputChange);
   }
 
   function wireSwipeForSheet() {
@@ -423,16 +408,9 @@
   async function loadRoster() {
     try {
       const list = await call('listKnownStudentsLite', []);
-      state.roster = Array.isArray(list) ? list.map((item) => ({
-        id: String(item.id || '').trim(),
-        firstName: String(item.firstName || '').trim(),
-        lastName: String(item.lastName || '').trim(),
-        school: String(item.school || '').trim(),
-        email: String(item.email || '').trim(),
-        grade: String(item.grade || '').trim()
-      })) : [];
+      setRoster(Array.isArray(list) ? list : []);
     } catch (_) {
-      state.roster = [];
+      setRoster([]);
     }
   }
 
@@ -445,7 +423,7 @@
       await loadMentors();
       renderSummary();
       await loadRoster();
-      attachSearchHandlers();
+      wireSuggest();
       wireEvents();
       wireSwipeForSheet();
       renderSelected();
