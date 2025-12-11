@@ -40,8 +40,10 @@
         <div class="kiosk-grid">
           <section class="kiosk-card" aria-label="Find your name">
             <span class="label">Search roster</span>
-            <input id="studentSearch" class="kiosk-input" type="text" autocomplete="off" placeholder="Start typing your first or last name" />
-            <ul id="studentSuggestList" class="suggest-list" role="listbox" aria-label="Student matches"></ul>
+            <div class="suggest-wrap">
+              <input id="studentSearch" class="kiosk-input" type="text" autocomplete="off" placeholder="Start typing your first or last name" />
+              <div id="studentSuggestList" class="suggest-panel" data-suggest-type="panel" role="listbox" aria-label="Student matches" hidden></div>
+            </div>
             <div id="selectedStudentCard" class="selection-card muted">
               <p id="selectedStudentSummary">No student selected.</p>
               <dl id="selectedStudentMeta" class="selected-meta is-empty">

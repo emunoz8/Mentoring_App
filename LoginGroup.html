@@ -23,6 +23,17 @@
         </div>
       </section>
 
+      <section class="panel" id="sessionPicker" aria-labelledby="sessionPickerHeading" hidden>
+        <header class="section-head">
+          <div class="section-title">
+            <h2 id="sessionPickerHeading">Select a circle</h2>
+            <p id="sessionPickerDesc" class="muted">Choose the circle you want to lock this kiosk to.</p>
+          </div>
+        </header>
+        <div id="sessionPickerList" class="session-list"></div>
+        <p id="sessionPickerEmpty" class="muted empty-hint" hidden>No active group sessions for today. Start one from Session Admin.</p>
+      </section>
+
       <section class="panel sign-in-panel" id="signInPanel" aria-labelledby="signInHeading">
         <header class="section-head">
           <div class="section-title">

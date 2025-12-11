@@ -260,13 +260,13 @@ function signinFetchSuggestIndex_() {
     const school = String(rec.school || '').trim();
     const grade  = signinNormalizeGradeLabel_(rec.grade);
     const email  = String(rec.email || '').trim();
-    const labelParts = [];
-    if (full) labelParts.push(full);
-    if (rec.id) labelParts.push(rec.id);
-    const metaParts = [school, grade].filter(Boolean);
-    const label = labelParts.length
-      ? `${labelParts.join(' · ')}${metaParts.length ? ' (' + metaParts.join(' • ') + ')' : ''}`
-      : rec.id;
+    const label = signinBuildDisplayLabel_({
+      firstName: first,
+      lastName: last,
+      id: rec.id,
+      school,
+      grade
+    });
     const searchFields = [
       rec.id,
       first,
@@ -284,7 +284,7 @@ function signinFetchSuggestIndex_() {
       email,
       grade,
       source: rec.source || '',
-      label: label || rec.id || '',
+      label: label || '',
       _searchFields: searchFields,
       _fullName: full
     };
@@ -534,6 +534,24 @@ function signinNormalizeGradeLabel_(gradeRaw) {
     if (num >= 12) return 'Senior';
   }
   return input.replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function signinBuildDisplayLabel_(entry) {
+  if (!entry) return '';
+  const first = String(entry.firstName || '').trim();
+  const last = String(entry.lastName || '').trim();
+  const name = `${first} ${last}`.trim();
+  const id = String(entry.id || entry.studentId || entry.value || '').trim();
+  const school = String(entry.school || '').trim();
+  const grade = String(entry.grade || '').trim();
+  const metaParts = [];
+  if (school) metaParts.push(school);
+  if (grade) metaParts.push(grade);
+  const meta = metaParts.length ? ` (${metaParts.join(', ')})` : '';
+  if (name && id) return `${name} - ${id}${meta}`;
+  if (id) return `${id}${meta}`;
+  if (name) return `${name}${meta}`;
+  return meta ? meta.slice(2) : '';
 }
 
 function bootstrapKnownStudents() {
@@ -845,16 +863,19 @@ function signInSuggestPeople(query, limit) {
     return (a.entry.id || '').localeCompare(b.entry.id || '');
   });
 
-  return scored.slice(0, n).map(({ entry }) => ({
-    id: entry.id,
-    firstName: entry.firstName,
-    lastName: entry.lastName,
-    school: entry.school,
-    email: entry.email,
-    grade: entry.grade,
-    source: entry.source,
-    label: entry.label
-  }));
+  return scored.slice(0, n).map(({ entry }) => {
+    const label = signinBuildDisplayLabel_(entry);
+    return {
+      id: entry.id,
+      firstName: entry.firstName,
+      lastName: entry.lastName,
+      school: entry.school,
+      email: entry.email,
+      grade: entry.grade,
+      source: entry.source,
+      label
+    };
+  });
 }
 
 function signinRecordGroupAttendance_(session, details, timestamp) {
@@ -981,6 +1002,75 @@ function recordStudentSignIn(payload) {
     createdKnown,
     rowIndex,
     targetSheet
+  };
+}
+
+function recordIndividualKioskSignIn(studentRaw, mentorIdRaw, mentorNameRaw) {
+  const student = studentRaw || {};
+  const studentId = String(student.studentId || student.id || '').trim();
+  if (!studentId) return { ok: false, error: 'Student ID is required.' };
+
+  const now = new Date();
+  const details = {
+    studentId,
+    firstName: String(student.firstName || '').trim(),
+    lastName : String(student.lastName  || '').trim(),
+    school   : String(student.school   || '').trim(),
+    email    : String(student.email    || '').trim(),
+    grade    : String(student.grade    || '').trim()
+  };
+  if (details.grade) {
+    details.grade = signinNormalizeGradeLabel_(details.grade);
+  }
+
+  const mentorId = String(mentorIdRaw || '').trim().toUpperCase();
+  const mentorName = String(mentorNameRaw || '').trim();
+  const mentorCell = mentorId || mentorName || '';
+  const groupLabel = mentorName || mentorId || 'Individual';
+
+  let rowIndex = null;
+  try {
+    const { sh, C } = queue_ensureSignInLogSheet_();
+    const width = Math.max(1, sh.getLastColumn());
+    const row = new Array(width).fill('');
+    if (C.Timestamp != null) row[C.Timestamp] = now;
+    if (C.ID != null) row[C.ID] = studentId;
+    if (C.Name != null) {
+      const name = `${details.firstName || ''} ${details.lastName || ''}`.trim();
+      row[C.Name] = name || studentId;
+    }
+    if (C.School != null) row[C.School] = details.school;
+    if (C.Group != null) row[C.Group] = groupLabel;
+    if (C.MentorRaw != null) row[C.MentorRaw] = mentorCell;
+    if (C.Status != null) row[C.Status] = STATUS ? STATUS.PENDING : 'Pending';
+    if (C.ClaimedBy != null) row[C.ClaimedBy] = '';
+    if (C.ClaimedAt != null) row[C.ClaimedAt] = '';
+    if (C.ProcessedAt != null) row[C.ProcessedAt] = '';
+    if (C.ContactID != null) row[C.ContactID] = '';
+    sh.appendRow(row);
+    rowIndex = sh.getLastRow();
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+
+  try {
+    signinEnqueueKnownStudentUpdate_(details, now, { updateLastSignIn: true });
+  } catch (err) {
+    console.error('Individual kiosk enqueue failed; falling back to direct write.', err);
+    try {
+      signinUpsertKnownStudent(details, { timestamp: now });
+    } catch (err2) {
+      return { ok: false, error: err2 && err2.message ? err2.message : String(err2) };
+    }
+  }
+
+  return {
+    ok: true,
+    mentorId,
+    mentorName,
+    student: details,
+    rowIndex,
+    targetSheet: SIGN_IN.SHEET
   };
 }
 

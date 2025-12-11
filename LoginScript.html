@@ -94,8 +94,20 @@
 
   function formatStudentDisplay(student) {
     if (!student) return '';
-    const full = `${student.firstName || ''} ${student.lastName || ''}`.trim();
-    return full || student.id || '';
+    const first = String(student.firstName || '').trim();
+    const last = String(student.lastName || '').trim();
+    const name = `${first} ${last}`.trim();
+    const id = String(student.id || student.studentId || '').trim();
+    const school = String(student.school || '').trim();
+    const grade = String(student.grade || '').trim();
+    const metaParts = [];
+    if (school) metaParts.push(school);
+    if (grade) metaParts.push(grade);
+    const meta = metaParts.length ? ` (${metaParts.join(', ')})` : '';
+    if (name && id) return `${name} - ${id}${meta}`;
+    if (id) return `${id}${meta}`;
+    if (name) return `${name}${meta}`;
+    return meta ? meta.slice(2) : '';
   }
 
   function closeSuggestMenu() {
@@ -218,6 +230,11 @@
     if (!records.length) {
       empty.hidden = false;
       empty.removeAttribute('hidden');
+      if (state.session) {
+        state.session = null;
+        clearSelectedStudent();
+      }
+      renderSessionSummary();
       return;
     }
     empty.hidden = true;

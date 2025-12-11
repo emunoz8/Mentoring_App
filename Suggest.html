@@ -5,6 +5,26 @@
   const getEl = (ref) => (typeof ref === 'string' ? document.getElementById(ref) : ref);
   const defaultRun = () => (window.google && google.script && google.script.run) || null;
   const multiRegistry = new Set();
+
+  function buildRosterLabel(entry) {
+    if (!entry) return '';
+    const first = String(entry.firstName || '').trim();
+    const last = String(entry.lastName || '').trim();
+    const name = `${first} ${last}`.trim();
+    const id = String(entry.id || entry.value || '').trim();
+    const school = String(entry.school || '').trim();
+    const grade = String(entry.grade || '').trim();
+    const metaParts = [];
+    if (school) metaParts.push(school);
+    if (grade) metaParts.push(grade);
+    const meta = metaParts.length ? ` (${metaParts.join(', ')})` : '';
+    if (name && id) return `${name} - ${id}${meta}`;
+    if (id) return `${id}${meta}`;
+    if (name) return `${name}${meta}`;
+    const fallback = String(entry.label || '').trim();
+    return fallback || meta.slice(1) || '';
+  }
+
   function closeMulti(except){
     multiRegistry.forEach(ctrl => {
       if (!ctrl || typeof ctrl.close !== 'function') return;
@@ -41,6 +61,7 @@
     if (placeholder) input.placeholder = placeholder;
     if (!input.hasAttribute('aria-controls') && list.id) input.setAttribute('aria-controls', list.id);
     input.setAttribute('aria-expanded', 'false');
+    list.setAttribute('aria-hidden', 'true');
 
     const manualInput = getEl(manualInputRef);
     const manualButton = getEl(manualButtonRef);
@@ -52,11 +73,17 @@
     let onSelectChange = null;
     let onSelectKeyDown = null;
     let onSelectBlur = null;
-    const isSelect = list && list.tagName && String(list.tagName).toLowerCase() === 'select';
+    const tagName = String(list && list.tagName || '').toLowerCase();
+    const dataType = String(list && list.dataset && list.dataset.suggestType || '').toLowerCase();
+    const isSelect = tagName === 'select';
+    const isPanel = dataType === 'panel' || (!isSelect && tagName === 'div');
+    const isList = !isSelect && !isPanel;
     const selectDefaultSize = isSelect ? Math.max(Number(list.getAttribute('size')) || 4, 2) : null;
-    if (isSelect) {
+    if (isSelect || isPanel) {
       list.hidden = true;
       list.classList.remove('is-open');
+    } else {
+      list.style.display = 'none';
     }
 
     const debounce = (fn, ms = 200) => {
@@ -73,11 +100,16 @@
         list.hidden = true;
         list.innerHTML = '';
         if (selectDefaultSize) list.size = selectDefaultSize;
+      } else if (isPanel) {
+        list.classList.remove('is-open');
+        list.hidden = true;
+        list.innerHTML = '';
       } else {
         list.style.display = 'none';
         list.innerHTML = '';
       }
       input.setAttribute('aria-expanded', 'false');
+      list.setAttribute('aria-hidden', 'true');
       active = -1;
     }
 
@@ -96,9 +128,14 @@
         );
         list.size = visible;
         list.focus({ preventScroll: true });
+      } else if (isPanel) {
+        list.hidden = false;
+        list.classList.add('is-open');
       } else {
         list.style.display = 'block';
+        list.hidden = false;
       }
+      list.setAttribute('aria-hidden', 'false');
     }
 
     function render(results) {
@@ -150,29 +187,31 @@
           return;
         }
         items.forEach((it, idx) => {
-          const li = document.createElement('li');
-          li.className = 'suggest-item';
+          const row = document.createElement(isPanel ? 'div' : 'li');
+          row.className = isPanel ? 'suggestion' : 'suggest-item';
           if (makeItemNode) {
             try {
               const node = renderItem(it);
               if (node instanceof Node) {
-                li.appendChild(node);
+                row.appendChild(node);
               } else if (node != null) {
-                li.textContent = String(node);
+                row.textContent = String(node);
               } else {
-                li.textContent = it.label || '';
+                row.textContent = it.label || '';
               }
             } catch (_) {
-              li.textContent = it.label || '';
+              row.textContent = it.label || '';
             }
           } else {
-            li.textContent = it.label || '';
+            row.textContent = it.label || '';
           }
-          li.addEventListener('mouseenter', () => setActive(idx));
-          li.addEventListener('mouseleave', () => setActive(-1));
-          li.addEventListener('mousedown', (e) => { e.preventDefault(); choose(idx); });
-          li.addEventListener('click', () => choose(idx));
-          list.appendChild(li);
+          row.setAttribute('role', 'option');
+          row.setAttribute('aria-selected', 'false');
+          row.addEventListener('mouseenter', () => setActive(idx));
+          row.addEventListener('mouseleave', () => setActive(-1));
+          row.addEventListener('mousedown', (e) => { e.preventDefault(); choose(idx); });
+          row.addEventListener('click', () => choose(idx));
+          list.appendChild(row);
         });
         openMenu();
       }
@@ -184,7 +223,11 @@
         if (idx >= 0 && idx < list.options.length) list.selectedIndex = idx;
         else list.selectedIndex = -1;
       } else {
-        Array.from(list.children).forEach((el, i) => el.classList.toggle('active', i === idx));
+        Array.from(list.children).forEach((el, i) => {
+          const isActive = i === idx;
+          el.classList.toggle('active', isActive);
+          el.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
       }
     }
 
@@ -331,20 +374,7 @@
   };
 
   global.wireRosterSuggest = function wireRosterSuggest(options = {}) {
-    const defaultFormat = (it) => {
-      if (!it) return '';
-      const first = String(it.firstName || '').trim();
-      const last  = String(it.lastName || '').trim();
-      const full  = `${first} ${last}`.trim();
-      const ident = String(it.id || it.value || '').trim();
-      const meta  = [String(it.school || '').trim(), String(it.grade || '').trim()].filter(Boolean);
-      if (full && ident) {
-        return `${full} · ${ident}${meta.length ? ' (' + meta.join(' • ') + ')' : ''}`;
-      }
-      if (full) return meta.length ? `${full} (${meta.join(' • ')})` : full;
-      if (ident) return meta.length ? `${ident} (${meta.join(' • ')})` : ident;
-      return String(it.label || '').trim();
-    };
+    const defaultFormat = (it) => buildRosterLabel(it);
 
     const merged = Object.assign(
       {
@@ -386,18 +416,7 @@
       label: String(raw.label || '').trim(),
       rowIndex: raw.rowIndex == null ? null : raw.rowIndex,
     };
-    if (!entry.label) {
-      const name = `${entry.firstName} ${entry.lastName}`.trim();
-      if (name && entry.id) {
-        const meta = [entry.school, entry.grade].filter(Boolean);
-        entry.label = `${name} · ${entry.id}${meta.length ? ' (' + meta.join(' • ') + ')' : ''}`;
-      } else if (name) {
-        entry.label = name;
-      } else if (entry.id) {
-        const meta = [entry.school, entry.grade].filter(Boolean);
-        entry.label = `${entry.id}${meta.length ? ' (' + meta.join(' • ') + ')' : ''}`;
-      }
-    }
+    if (!entry.label) entry.label = buildRosterLabel(entry);
     entry._fullName = `${entry.firstName} ${entry.lastName}`.trim();
     entry._searchFields = [
       entry.id,

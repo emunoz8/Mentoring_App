@@ -67,8 +67,8 @@
                 <div class="chips-summary muted" id="whoLine"></div>
               </div>
               <div class="suggest-wrap input-elevated">
-                <input id="studentInput" type="text" placeholder="Search by student name or ID…" autocomplete="off" />
-                <select id="studentSuggest" class="suggest-select" size="4" hidden></select>
+                <input id="studentInput" type="text" placeholder="Search by student name or ID…" autocomplete="off" aria-expanded="false" aria-controls="studentSuggest" role="combobox" />
+                <div id="studentSuggest" class="suggest-panel" data-suggest-type="panel" role="listbox" hidden></div>
               </div>
             </div>
           </section>

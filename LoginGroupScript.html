@@ -8,6 +8,7 @@
       session: null,
       roster: [],
       selected: null,
+      sessions: [],
     },
     suggestHandle: null,
     rosterResolver: null,
@@ -32,6 +33,134 @@
     banner.removeAttribute('hidden');
   }
 
+  function setSignInPanelVisible(visible) {
+    const panel = $('signInPanel');
+    if (!panel) return;
+    if (visible) {
+      panel.hidden = false;
+      panel.removeAttribute('hidden');
+    } else {
+      panel.hidden = true;
+      panel.setAttribute('hidden', '');
+    }
+  }
+
+  function persistSessionInUrl(session) {
+    if (!session || !session.id) return;
+    const params = new URLSearchParams(window.location.search || '');
+    if (!params.get('page')) params.set('page', 'LoginGroup');
+    params.set('session', session.id);
+    if (session.date) params.set('date', session.date);
+    const next = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+    window.history.replaceState({}, '', next);
+  }
+
+  function formatSessionMeta(session) {
+    const date = session && session.date ? session.date : '';
+    const count = Number(session && session.signInCount != null ? session.signInCount : 0) || 0;
+    let lastLabel = '—';
+    if (session && session.lastSignInAt) {
+      const last = new Date(session.lastSignInAt);
+      if (!Number.isNaN(last.getTime())) {
+        lastLabel = last.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+    }
+    return `${date} • ${count} signed in • Last ${lastLabel}`;
+  }
+
+  function hideSessionPicker() {
+    const panel = $('sessionPicker');
+    const list = $('sessionPickerList');
+    const empty = $('sessionPickerEmpty');
+    if (panel) {
+      panel.hidden = true;
+      panel.setAttribute('hidden', '');
+    }
+    if (list) list.innerHTML = '';
+    if (empty) {
+      empty.hidden = true;
+      empty.setAttribute('hidden', '');
+    }
+    setSignInPanelVisible(true);
+  }
+
+  function showSessionPicker(list, opts = {}) {
+    App.state.session = null;
+    clearSelectedStudent();
+    renderSessionSummary();
+    closeManualSheet();
+    const panel = $('sessionPicker');
+    const listEl = $('sessionPickerList');
+    const empty = $('sessionPickerEmpty');
+    const heading = $('sessionPickerHeading');
+    const desc = $('sessionPickerDesc');
+    if (heading) heading.textContent = opts.heading || 'Select a circle';
+    if (desc) desc.textContent = opts.message || 'Select a circle to begin.';
+    if (!panel || !listEl) return;
+    panel.hidden = false;
+    panel.removeAttribute('hidden');
+    setSignInPanelVisible(false);
+    listEl.innerHTML = '';
+    if (!Array.isArray(list) || !list.length) {
+      if (empty) {
+        const dateNote = opts.date ? ` for ${opts.date}` : '';
+        empty.textContent = opts.emptyMessage || `No active group sessions${dateNote}. Start one from Session Admin.`;
+        empty.hidden = false;
+        empty.removeAttribute('hidden');
+      }
+      return;
+    }
+    if (empty) {
+      empty.hidden = true;
+      empty.setAttribute('hidden', '');
+    }
+    list.forEach((session) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'session-card kiosk-session-card';
+      const name = document.createElement('span');
+      name.className = 'session-name';
+      name.textContent = session.label || '(Session)';
+      button.appendChild(name);
+      const meta = document.createElement('span');
+      meta.className = 'session-meta';
+      meta.textContent = formatSessionMeta(session);
+      button.appendChild(meta);
+      button.addEventListener('click', () => {
+        applySession(session);
+        showStatus(`Locked to ${session.label || 'session'}.`, 'ok');
+      });
+      listEl.appendChild(button);
+    });
+  }
+
+  function applySession(session, options = {}) {
+    if (!session || !session.id) return;
+    App.state.session = {
+      id: String(session.id),
+      label: session.label || '(Session)',
+      date: session.date || '',
+      rowIndex: session.rowIndex != null ? session.rowIndex : null,
+      signInCount: Number(session.signInCount || 0),
+      lastSignInAt: session.lastSignInAt || ''
+    };
+    clearSelectedStudent();
+    renderSessionSummary();
+    hideSessionPicker();
+    if (options.updateUrl !== false) {
+      persistSessionInUrl(App.state.session);
+    }
+  }
+
+  function ensureSessionReady() {
+    if (App.state.session && App.state.session.id) return true;
+    showStatus('Select a circle before recording attendance.', 'bad');
+    showSessionPicker(App.state.sessions || [], {
+      message: 'Choose an active circle to lock this kiosk.'
+    });
+    return false;
+  }
+
   function closeSuggestMenu() {
     if (App.suggestHandle && typeof App.suggestHandle.close === 'function') {
       App.suggestHandle.close();
@@ -40,8 +169,20 @@
 
   function formatStudentDisplay(entry) {
     if (!entry) return '';
-    const full = `${entry.firstName || ''} ${entry.lastName || ''}`.trim();
-    return full || entry.id || '';
+    const first = String(entry.firstName || '').trim();
+    const last = String(entry.lastName || '').trim();
+    const name = `${first} ${last}`.trim();
+    const id = String(entry.id || '').trim();
+    const school = String(entry.school || '').trim();
+    const grade = String(entry.grade || '').trim();
+    const metaParts = [];
+    if (school) metaParts.push(school);
+    if (grade) metaParts.push(grade);
+    const meta = metaParts.length ? ` (${metaParts.join(', ')})` : '';
+    if (name && id) return `${name} - ${id}${meta}`;
+    if (id) return `${id}${meta}`;
+    if (name) return `${name}${meta}`;
+    return meta ? meta.slice(2) : '';
   }
 
   function normalizeRosterItem(item) {
@@ -167,6 +308,7 @@
   }
 
   function openManualSheet() {
+    if (!ensureSessionReady()) return;
     const sheet = $('manualSheet');
     if (!sheet) return;
     closeSuggestMenu();
@@ -186,9 +328,10 @@
   }
 
   function recordKnownSignIn() {
+    if (!ensureSessionReady()) return;
     const selected = App.state.selected;
     const button = $('signInKnownBtn');
-    if (!selected || !App.state.session) {
+    if (!selected) {
       showStatus('Pick your name first.', 'bad');
       return;
     }
@@ -220,6 +363,7 @@
 
   function recordManualSignIn(event) {
     event.preventDefault();
+    if (!ensureSessionReady()) return;
     const form = event.currentTarget;
     const details = {
       studentId: $('manualId') && $('manualId').value.trim(),
@@ -236,6 +380,11 @@
     const controls = Array.from(form.elements);
     controls.forEach((el) => { el.disabled = true; });
     showStatus('Recording attendance…', 'info');
+    const payload = {
+      sessionId: App.state.session.id,
+      sessionRow: App.state.session.rowIndex || null,
+      student: details
+    };
     window.google.script.run
       .withSuccessHandler((res) => {
         if (!res || !res.ok) {
@@ -251,23 +400,35 @@
         showStatus(err && err.message ? err.message : 'Sign-in failed.', 'bad');
         controls.forEach((el) => { el.disabled = false; });
       })
-      .recordStudentSignIn({
-        sessionId: App.state.session && App.state.session.id,
-        student: details
-      });
+      .recordStudentSignIn(payload);
   }
 
   function renderSessionSummary() {
     const summary = $('sessionSummary');
-    if (summary && App.state.session) {
+    if (!summary) return;
+    if (App.state.session && App.state.session.id) {
       summary.textContent = `${App.state.session.label || '(Session)'} – ${App.state.session.date || ''}`;
+    } else {
+      summary.textContent = 'Select a circle to begin.';
     }
+  }
+
+  function loadRoster() {
+    window.google.script.run
+      .withSuccessHandler((roster) => {
+        setRoster(Array.isArray(roster) ? roster : []);
+        if (window.console && typeof console.debug === 'function') {
+          console.debug('[Roster] Loaded', App.state.roster.length);
+        }
+      })
+      .withFailureHandler(() => { setRoster([]); })
+      .listKnownStudentsLite();
   }
 
   function loadSessionAndRoster() {
     const params = new URLSearchParams(window.location.search || '');
-    const sessionId = params.get('session') || '';
-    const dateParam = params.get('date') || '';
+    const sessionId = (params.get('session') || '').trim();
+    const dateParam = (params.get('date') || '').trim();
     const today = new Date();
     const todayYMD = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     const date = dateParam || todayYMD;
@@ -275,28 +436,39 @@
     const hiddenDate = $('sessionDateInput');
     if (hiddenDate) hiddenDate.value = date;
 
+    setSignInPanelVisible(false);
+
     window.google.script.run
       .withSuccessHandler((response) => {
         const sessions = response && Array.isArray(response.sessions) ? response.sessions : [];
-        const match = sessions.find((session) => String(session.id) === String(sessionId));
-        App.state.session = match || {
-          id: sessionId,
-          label: match ? match.label : '(Unknown session)',
-          date,
-          rowIndex: match ? match.rowIndex : null
-        };
-        App.state.selected = null;
-        renderSelectedStudent();
-        renderSessionSummary();
-        window.google.script.run
-          .withSuccessHandler((roster) => {
-            setRoster(roster);
-            if (window.console && typeof console.debug === 'function') {
-              console.debug('[Roster] Loaded', App.state.roster.length);
-            }
-          })
-          .withFailureHandler(() => { setRoster([]); })
-          .listKnownStudentsLite();
+        App.state.sessions = sessions;
+
+        if (sessionId) {
+          const match = sessions.find((session) => String(session.id) === sessionId);
+          if (match) {
+            applySession(match, { updateUrl: false });
+          } else if (sessions.length) {
+            showStatus('Session link expired. Select a circle below.', 'bad');
+            showSessionPicker(sessions, {
+              date,
+              message: 'Choose an active circle to lock this kiosk.'
+            });
+          } else {
+            showStatus('No active sessions for this date. Start one from Session Admin.', 'bad');
+            showSessionPicker([], { date });
+          }
+        } else if (sessions.length === 1) {
+          applySession(sessions[0]);
+          showStatus(`Locked to ${sessions[0].label || 'session'}.`, 'info');
+        } else if (sessions.length > 1) {
+          showStatus('Select a circle to begin.', 'info');
+          showSessionPicker(sessions, { date });
+        } else {
+          showStatus('No active sessions for this date. Start one from Session Admin.', 'bad');
+          showSessionPicker([], { date });
+        }
+
+        loadRoster();
       })
       .withFailureHandler((err) => {
         showStatus(err && err.message ? err.message : 'Session lookup failed.', 'bad');
@@ -307,6 +479,7 @@
   function init() {
     wireSuggest();
     renderSelectedStudent();
+    renderSessionSummary();
 
     const manualForm = $('manualEntryForm');
     if (manualForm) manualForm.addEventListener('submit', recordManualSignIn);

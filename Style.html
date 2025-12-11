@@ -822,26 +822,57 @@ input:focus, textarea:focus, select:focus{
 .suggest-wrap.input-elevated input{
   padding-left:46px;
 }
-.suggest-select{
+.suggest-panel{
   position:absolute;
   top:calc(100% + 6px);
   left:0;
   right:0;
-  width:100%;
+  display:none;
+  flex-direction:column;
+  gap:6px;
+  padding:10px;
+  background:#fff;
   border:1px solid var(--line);
   border-radius:10px;
-  box-shadow:var(--shadow);
-  background:#fff;
+  box-shadow:0 16px 34px -22px rgba(15,23,42,.4);
+  max-height:260px;
+  overflow:auto;
   z-index:2000;
-  display:none;
-  max-height:240px;
 }
-.suggest-select.is-open{
-  display:block;
+.suggest-panel.is-open{
+  display:flex;
 }
-.suggest-select option{
-  padding:8px 12px;
+.suggest-panel .suggest-option{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  padding:10px 12px;
+  border-radius:12px;
+  cursor:pointer;
+  border:1px solid transparent;
+  transition:border-color .12s ease, background .12s ease, box-shadow .12s ease;
+}
+.suggest-panel .suggest-option:hover,
+.suggest-panel .suggest-option.is-active{
+  background:linear-gradient(120deg, rgba(110,44,107,.12), rgba(110,44,107,.05));
+  border-color:rgba(110,44,107,.25);
+  box-shadow:var(--shadow);
+}
+.suggest-panel .suggest-line-primary{
+  font-weight:600;
   font-size:.95rem;
+  color:#0f172a;
+}
+.suggest-panel .suggest-line-meta{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  font-size:.78rem;
+  color:var(--muted);
+}
+.suggest-panel .suggest-line-id{
+  color:#4c51bf;
+  font-weight:600;
 }
 .suggest-menu{
   position:absolute;
@@ -849,7 +880,8 @@ input:focus, textarea:focus, select:focus{
   left:0;
   right:0;
   list-style:none;
-  margin:0; padding:6px 0;
+  margin:0;
+  padding:6px 0;
   background:#fff;
   border:1px solid var(--line);
   border-radius:10px;
@@ -866,7 +898,10 @@ input:focus, textarea:focus, select:focus{
   flex-direction:column;
   gap:4px;
 }
-.suggest-menu li:hover, .suggest-menu li.active{ background:#f1f5ff; }
+.suggest-menu li:hover,
+.suggest-menu li.active{
+  background:#f1f5ff;
+}
 .suggest-menu li .suggest-line-primary{
   font-weight:600;
   font-size:.95rem;

@@ -236,7 +236,12 @@ function fillForm(rec){
   rec = rec || {};
   FIELDS.forEach(f=>{
     const el=$(f.key); if(!el) return;
-    if(f.key==='intakeDate'){ el.value=todayYMD(); return; }
+    if (f.key === 'intakeDate') {
+      const raw = rec[f.key];
+      const normalized = toDateInputValue(raw);
+      el.value = normalized || todayYMD();
+      return;
+    }
     let val = rec[f.key]!=null ? rec[f.key] : '';
     if(f.type==='date'){ el.value = toDateInputValue(val); }
     else if(f.type==='select'){

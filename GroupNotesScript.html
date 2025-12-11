@@ -217,11 +217,15 @@
     m.addEventListener('click', (e) => { if (e.target === m) m.style.display = 'none'; });
   })();
 
+  let mentorSuggestId = 0;
+
   // ---------- Mentors picker ----------
   function wireMentorPicker(noteEl){
     const chipsEl = noteEl.querySelector('.chips');
     const input   = noteEl.querySelector('.mentor-input');
     const sugg    = noteEl.querySelector('.suggestions');
+
+    if (!chipsEl || !input || !sugg) return null;
 
     const selected = noteEl._selectedMentors || (noteEl._selectedMentors = []);
     let pendingMerge = []; // Remember server-provided mentors for name hydration
@@ -229,6 +233,19 @@
       console.warn('Mentor preload failed:', err);
       return [];
     });
+
+    let activeIndex = -1;
+
+    if (!sugg.id) {
+      mentorSuggestId += 1;
+      sugg.id = `mentorSuggest-${mentorSuggestId}`;
+    }
+    input.setAttribute('role', 'combobox');
+    input.setAttribute('aria-autocomplete', 'list');
+    input.setAttribute('aria-expanded', 'false');
+    input.setAttribute('aria-controls', sugg.id);
+    sugg.setAttribute('role', 'listbox');
+    sugg.setAttribute('aria-hidden', 'true');
 
     function renderChips(){
       chipsEl.innerHTML = '';
@@ -251,6 +268,35 @@
       });
     }
     noteEl._renderChips = renderChips;
+
+    function interactiveRows(){
+      return Array.from(sugg.querySelectorAll('.suggestion')).filter(row => row.dataset.empty !== 'true');
+    }
+    function clearActive(){
+      Array.from(sugg.querySelectorAll('.suggestion')).forEach(row => {
+        row.classList.remove('active');
+        row.removeAttribute('aria-selected');
+      });
+    }
+    function highlight(idx){
+      const rows = interactiveRows();
+      clearActive();
+      if (!rows.length) {
+        activeIndex = -1;
+        return;
+      }
+      if (idx == null || idx < 0) {
+        activeIndex = -1;
+        return;
+      }
+      const count = rows.length;
+      const normalized = ((idx % count) + count) % count;
+      activeIndex = normalized;
+      const row = rows[normalized];
+      row.classList.add('active');
+      row.setAttribute('aria-selected', 'true');
+      row.scrollIntoView({ block: 'nearest' });
+    }
 
     function mergeMentorList(list, remember = true){
       const normalized = Array.isArray(list)
@@ -278,12 +324,25 @@
       renderChips();
     }
 
-    function closeSuggestions(){ sugg.classList.remove('open'); sugg.innerHTML=''; }
+    function closeSuggestions(){
+      sugg.classList.remove('open');
+      sugg.setAttribute('aria-hidden', 'true');
+      input.setAttribute('aria-expanded', 'false');
+      sugg.innerHTML='';
+      clearActive();
+      activeIndex = -1;
+    }
     function openSuggestions(items){
-      sugg.classList.add('open'); sugg.innerHTML = '';
-      items.slice(0,8).forEach(m => {
+      sugg.classList.add('open');
+      sugg.setAttribute('aria-hidden', 'false');
+      input.setAttribute('aria-expanded', 'true');
+      sugg.innerHTML = '';
+      sugg.scrollTop = 0;
+      const frag = document.createDocumentFragment();
+      items.slice(0,8).forEach((m, idx) => {
         const row = document.createElement('div');
         row.className = 'suggestion';
+        row.setAttribute('role', 'option');
         row.textContent = m.name || m.id;
         row.addEventListener('mousedown', (e)=>{
           e.preventDefault();
@@ -292,17 +351,23 @@
             selected.push({ id:idU, name: m.name || idU });
             renderChips();
           }
-          input.value = ''; closeSuggestions();
+          input.value = '';
+          closeSuggestions();
         });
-        sugg.appendChild(row);
+        row.addEventListener('mouseenter', () => highlight(idx));
+        frag.appendChild(row);
       });
       if (!items.length) {
         const row = document.createElement('div');
         row.className = 'suggestion';
-        row.style.color = '#98a2b3';
+        row.dataset.empty = 'true';
+        row.setAttribute('role', 'presentation');
         row.textContent = 'No matches';
-        sugg.appendChild(row);
+        frag.appendChild(row);
       }
+      sugg.appendChild(frag);
+      clearActive();
+      if (items.length === 1) highlight(0);
     }
 
     input.addEventListener('input', () => {
@@ -314,9 +379,28 @@
       openSuggestions(matches);
     });
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); const first = sugg.querySelector('.suggestion'); if (first) first.dispatchEvent(new Event('mousedown')); }
-      if (e.key === 'Backspace' && !input.value && selected.length) { selected.pop(); renderChips(); }
-      if (e.key === 'Escape') { closeSuggestions(); }
+      const options = interactiveRows();
+      if (e.key === 'ArrowDown') {
+        if (!options.length) return;
+        e.preventDefault();
+        highlight(activeIndex + 1);
+      } else if (e.key === 'ArrowUp') {
+        if (!options.length) return;
+        e.preventDefault();
+        highlight(activeIndex < 0 ? options.length - 1 : activeIndex - 1);
+      } else if (e.key === 'Enter') {
+        if (!options.length) return;
+        e.preventDefault();
+        const target = activeIndex >= 0 ? options[activeIndex] : options[0];
+        target?.dispatchEvent(new Event('mousedown'));
+      } else if (e.key === 'Backspace') {
+        if (!input.value && selected.length) {
+          selected.pop();
+          renderChips();
+        }
+      } else if (e.key === 'Escape') {
+        closeSuggestions();
+      }
     });
     input.addEventListener('blur', () => setTimeout(closeSuggestions, 120));
 
